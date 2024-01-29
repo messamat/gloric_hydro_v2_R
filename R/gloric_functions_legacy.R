@@ -1427,29 +1427,20 @@ classtableformat <- function(df, KWtab, tabname) {
 #' estimates of monthly discharge from WaterGAP v2.2.
 #'
 #' @param inp_GRDCgaugep path to point data for GRDC gauging stations.
-#' @param inp_GSIMgaugep path to point data for GSIM gauging stations.
 #' @param inp_riveratlas2 path to attribute table of RiverATLAS v1.0.9
-#' @param in_monthlydischarge data frame of naturalized monthly discharge for
-#' every river reach in HydroSHEDS
+
 #'
 #' @return object of class \link[sf]{sf}
 #'
 #' @export
-read_gaugep <- function(inp_GRDCgaugep, inp_GSIMgaugep,
-                        inp_riveratlas2, in_monthlydischarge=NULL) {
+read_gaugep <- function(inp_GRDCgaugep,
+                        inp_riveratlas2) {
   #Import gauge stations
-  GRDCgaugep <- st_read(dsn = dirname(inp_GRDCgaugep),
+  GRDCgaugep <- vect(dsn = dirname(inp_GRDCgaugep),
                         layer = basename(inp_GRDCgaugep))
   
-  GSIMgaugep <- st_read(dsn = dirname(inp_GSIMgaugep),
-                        layer = basename(inp_GSIMgaugep))
-  
-  #Rename
-  GRDCgaugep$GAUGE_NO <- GRDCgaugep$GRDC_NO
-  GSIMgaugep$GAUGE_NO <- GSIMgaugep$gsim_no
-  GSIMgaugep$manualsnap_mathis <- GSIMgaugep$manualsnap
-  GSIMgaugep$snap_comment_mathis <- GSIMgaugep$snap_comment
-  
+
+
   #Row bind GSIM and GRDC stations
   GRDCgaugep$area_correct <- GRDCgaugep$GRDC_AREA
   GRDCgaugep$gsim_no <- NA

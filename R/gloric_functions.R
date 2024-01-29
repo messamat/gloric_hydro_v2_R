@@ -51,7 +51,7 @@ readformatGRDC<- function(path) {
 #' Based on selection of gauges, create a list of paths to streamflow data
 #' associated with gauges.
 #'
-#' @param inp_GRDCgaugedir path to directory containing streamflow data GRDC standard files.
+#' @param inp_GRDC_qdat_dir path to directory containing streamflow data GRDC standard files.
 #' @param in_gaugep table containing column named \code{GRDC_NO} with the
 #' gauge IDs that will be used to generate file path.
 #'
@@ -61,15 +61,15 @@ readformatGRDC<- function(path) {
 #' @export
 
 
-read_GRDCgauged_paths <- function(inp_GRDCgaugedir, in_GRDC_metadata,
-                                  inp_GIRESgaugemetadata, inp_gaugep) { #, gaugeid = 'GRDC_NO' down the line
+read_GRDCgauged_paths <- function(inp_GRDC_qdat_dir, in_GRDC_metadata,
+                                  inp_GIRES_metadata, inp_gaugep) { #, gaugeid = 'GRDC_NO' down the line
   #Read gauges
   gaugep <- vect(dirname(inp_gaugep), layer=basename(inp_gaugep)) %>%
     as.data.table
   
   #Get data paths of daily records for gauge stations
   file_names_dt <- gaugep[!is.na(gaugep$grdc_no), 
-                         list(filename = file.path(inp_GRDCgaugedir,
+                         list(filename = file.path(inp_GRDC_qdat_dir,
                                    paste(grdc_no,"_Q_Day.Cmd.txt", sep=""))
                               ), 
                          by=grdc_no]
@@ -77,25 +77,28 @@ read_GRDCgauged_paths <- function(inp_GRDCgaugedir, in_GRDC_metadata,
   #Check those that are missing
   file_names_dt[, exists := file.exists(filename)]
   
-  gires_metada <- fread(inp_GIRESgaugemetadata) #get metadata for stations from Messager et al. 2021
+  gires_metada <- fread(inp_GIRES_metadata) #get metadata for stations from Messager et al. 2021
   #the grdc_no of some stations have changed
   
+  #Make sure that there aren't missing 2024 gauges
   missing_gauges_grdc <- merge(file_names_dt[!(exists),],
                                in_GRDC_metadata,
                                by='grdc_no')
   
+  #Check which gauges from 2014 that were used in 2021 et al. are not in the 2024 GRDC dataset
   missing_gauges_gires <- merge(file_names_dt[!(exists),],
                                 gires_metada[, .(GRDC_NO, RIVER, STATION, AREA, LONG_ORG, LAT_ORG)],
                                 by.x='grdc_no',
                                 by.y='GRDC_NO')
   
+  #Get those that match by coordinates
   missing_gauges_gires_rejoin_coord <-  merge(missing_gauges_gires,
                                               in_GRDC_metadata,
                                               by.x=c('LONG_ORG', 'LAT_ORG'),
                                               by.y=c('long', 'lat'),
                                               suffix=c('_old', '_new'))
   
-  
+  #Get those that strictly match by name
   setnames(missing_gauges_gires, c('RIVER', 'STATION'), c('river', 'station'))
   
   
@@ -106,6 +109,7 @@ read_GRDCgauged_paths <- function(inp_GRDCgaugedir, in_GRDC_metadata,
     .[!(grdc_no_new %in% missing_gauges_gires_rejoin_coord$grdc_no_new),]
   
   
+  #from the rest, get those that match by name through partial match
   nojoin <- missing_gauges_gires[
     !(grdc_no %in% c(missing_gauges_gires_rejoin_coord$grdc_no_old,
                      missing_gauges_gires_rejoin_name$grdc_no_old)),
@@ -132,7 +136,7 @@ read_GRDCgauged_paths <- function(inp_GRDCgaugedir, in_GRDC_metadata,
   ) %>%
     merge(file_names_dt, ., by.x='grdc_no', by.y='grdc_no_old', all.x=T) %>%
     .[is.na(grdc_no_new), grdc_no_new := grdc_no] %>%
-    .[, filename := file.path(inp_GRDCgaugedir,
+    .[, filename := file.path(inp_GRDC_qdat_dir,
                              paste(grdc_no_new,"_Q_Day.Cmd.txt", sep=""))
       ] %>%
     .[, -'grdc_no', with=F] %>%

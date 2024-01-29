@@ -17,42 +17,38 @@ tar_option_set(format = "qs",
 ############################# Define targets plan ##############################
 list(
   #------------------------------- File paths ----------------------------------
-  tar_target(path_GRDCgaugedir, file.path(datdir, "gauges", "grdc", "q_day"), format='file') ,
-  tar_target(path_GRDCmetadata, file.path(datdir, "gauges", "grdc", "GRDC_Stations.xlsx")),
-  tar_target(path_GIRESgaugemetadata, file.path(datdir, 'gauges', 'gires', "high_qual_daily_stations.csv"), format='file'),
-  tar_target(path_gaugep, file.path(resdir, 'stations_preprocess.gdb', 'grdc_p_o20y_cleanjoin'))
-  ,
+  tar_target(path_GRDC_qdat_dir, file.path(datdir, "gauges", "grdc", "q_day"), format='file') ,
+  tar_target(path_GRDC_metadata, file.path(datdir, "gauges", "grdc", "GRDC_Stations.xlsx"), format='file'),
+  tar_target(path_GIRES_metadata, file.path(datdir, 'gauges', 'gires', "high_qual_daily_stations.csv"), format='file'),
+  tar_target(path_gaugep, file.path(resdir, 'stations_preprocess.gdb', 'grdc_p_o20y_cleanjoin')),
   
+  tar_target(path_gauges_anthropo_stats, file.path(resdir, 'stations_anthropo_stats_upst.csv'), format='file')
+  ,  
   
   #------------------------------ Read files -----------------------------------
   tar_target(GRDC_metadata,
-             read_xlsx(path_GRDCmetadata, sheet = 'station_catalogue') %>%
+             read_xlsx(path_GRDC_metadata, sheet = 'station_catalogue') %>%
                as.data.table
   )
-  # ,
-  # inp_GRDCgaugedir = tar_read(path_GRDCgaugedir)
-  # inp_GIRESgaugemetadata = tar_read(path_GIRESgaugemetadata)
+  ,
+  
+  tar_target(g_anthropo_stats,
+             fread(path_gauges_anthropo_stats)
+             )
+  ,
+
+  tar_target(GRDCgauged_filenames,
+             read_GRDCgauged_paths(
+               inp_GRDC_qdat_dir = path_GRDC_qdat_dir,
+               in_GRDC_metadata = GRDC_metadata,
+               inp_GIRES_metadata = path_GIRES_metadata,
+               inp_gaugep = path_gaugep
+               ))
+  #,
+  # inp_GRDC_qdat_dir = tar_read(path_GRDC_qdat_dir)
+  # in_GRDC_metadata = tar_read(path_GRDC_metadata)
+  # inp_GIRES_metadata = tar_read(path_GIRES_metadata)
   # inp_gaugep = tar_read(path_gaugep)
-  # in_GRDC_metadata = tar_read(GRDC_metadata)
-  #
-  # tar_target(GRDCgauged_filenames,
-  #            read_GRDCgauged_paths(
-  #              inp_GRDCgaugedir = path_GRDCgaugedir,
-  #              inp_GRDCmetadata = path_GRDCmetadata,
-  #              inp_GIRESgaugemetadata = path_GIRESgaugemetadata,
-  #              inp_gaugep = path_gaugep
-  #              ))
-  # )
-  # ,
-  # 
-  # GRDCgaugestats = future_map(GRDCgauged_filenames, #To map
-  #                             comp_GRDCdurfreq, #Function to run on each file name
-  #                             maxgap = 20,
-  #                             in_gaugep = gaugep,
-  #                             windowsize = 20,
-  #                             fullwindow = FALSE,
-  #                             monthsel = NULL, #Other arguments in function
-  #                             mdurthresh = 1,
-  #                             verbose = FALSE,
-  #                             .progress = TRUE),
+             
 )
+

@@ -1,4 +1,30 @@
 ############################ UTILITY FUNCTIONS ##################################
+#------ mergDTlist -----------------------------------------
+#Function to merge a list of data.tables (dt), adding a suffix to all columns
+#by dt based on the name of the input data.table
+mergeDTlist <- function(dt_list, by = NULL, all = TRUE, sort = FALSE,
+                        set_suffix=TRUE) {
+  
+  if (set_suffix) {
+    dt_list <-  Map(function(dt_name, dt) {
+      dt_copy <- copy(dt)
+      cols_to_rename <- names(dt)[!(names(dt) %in% by)]
+      setnames(dt_copy,
+               old=cols_to_rename,
+               new=paste(cols_to_rename, dt_name, sep='_'))
+      return(dt_copy)
+    },
+    names(dt_list), dt_list
+    )
+  }
+  
+  out_merge <- Reduce(
+    function(...) {
+      merge(..., by = by, all = all, sort = sort)
+    }, dt_list)
+  
+  return(out_merge)
+}
 #------ readformatGRDC -----------------
 #' Read and pre-format GRDC data
 #'
@@ -44,16 +70,17 @@ readformatGRDC<- function(path) {
 }
 
 
-#------ format_for_ridges -----------------------------------------------------
-format_for_ridges <- function(in_dt, fieldroot, id_var='grdc_no') {
+#------ melt_anthropo_stats -----------------------------------------------------
+melt_anthropo_stats <- function(in_dt, fieldroot, 
+                                id_var='grdc_no', keep_yrs = F) {
   dt_formatted <- melt(in_dt,
                        id.vars=id_var,
                        measure.vars = grep(paste0(fieldroot, '_[0-9]{4}'), 
                                            names(in_dt),
                                            value=T)) %>%
     .[, year:= as.integer(tstrsplit(variable, '_', keep=2)[[1]])] %>%
-    merge(in_dt[, list(year = seq(d_start, d_end)), by=id_var],
-          by=c(id_var, 'year'), all.x=F)
+    merge(in_dt[, list(year = seq(d_start, d_end)), by=id_var], .,
+          by=c(id_var, 'year'), all.x=keep_yrs)
   
   dt_formatted[, n := .N, by=year]
   return(dt_formatted)
@@ -225,7 +252,7 @@ format_gauges_metadata <- function(
   
   gstats_merge_nodupli <- sort(gstats_merge, 'grdc_match') %>%
     .[!duplicated(grdc_no),] %>% #remove duplicates
-    .[!is.na(d_yrs) | (d_yrs < min_yrs),]  #Remove those with insufficient daily data (anymore. used to)
+    .[!is.na(d_yrs) & (d_yrs > min_yrs),]  #Remove those with insufficient daily data (anymore. used to)
 
   #Compute pop density
   pop_cols <- grep('pop_[0-9]{4}', names(gstats_merge_nodupli), value=T)  
@@ -257,7 +284,7 @@ format_gauges_metadata <- function(
 
 plot_anthropo_stats <- function(in_gmeta_formatted) {
   #Degree of regulation plot ---------------------------------------------------
-  dt_format_dor <- format_for_ridges(in_dt=in_gmeta_formatted,
+  dt_format_dor <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
                                      fieldroot = 'dor') 
   
   p_dor <- ggplot(dt_format_dor, aes(x=value, y=year, fill = n, 
@@ -280,7 +307,7 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
   #, scale=20
   
   #Crop plot -----------------------------------------------------
-  dt_format_crop <- format_for_ridges(in_dt=in_gmeta_formatted,
+  dt_format_crop <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
                                       fieldroot = 'crop') %>%
     .[!is.na(value),]
   
@@ -304,7 +331,7 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
     )
 
   #Population density plot -----------------------------------------------------
-  dt_format_pop <- format_for_ridges(in_dt=in_gmeta_formatted,
+  dt_format_pop <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
                                      fieldroot = 'pop') %>%
     .[!is.na(value),]
 
@@ -330,7 +357,7 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
     )
 
   #Built plot -----------------------------------------------------
-  dt_format_built <- format_for_ridges(in_dt=in_gmeta_formatted,
+  dt_format_built <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
                                      fieldroot = 'built') %>%
     .[!is.na(value),]
 
@@ -359,4 +386,51 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
   return(p_patchwork)
 }
 
+#------ filter_reference_gauges ------------------------------------------------
 #in_gmeta_formatted = tar_read(gmeta_formatted)
+# max_dor = 2
+# max_crop = 25
+# max_pop = 100
+# max_built = 1
+
+filter_reference_gauges <- function(in_gmeta_formatted,
+                                    max_dor, max_crop, max_pop, max_built) {
+  
+  nafill_anthropo <- function(in_dt, fieldroot) {
+    fn <- paste0(fieldroot, '_interp')
+    dor_dat <- melt_anthropo_stats(in_gmeta_formatted, 
+                                   fieldroot = fieldroot, keep_yrs = T) %>%
+      .[order(grdc_no, year)] %>%
+      .[, (fn) := nafill(value, type='nocb'), by=grdc_no] %>%
+      .[, (fn) := nafill(get(fn), type='locf'), by=grdc_no] 
+    return(dor_dat[, c('grdc_no', 'year',  fn), with=F])
+  }
+
+  anthropo_interpolated <- lapply(
+    c('dor', 'pop', 'built', 'crop'), 
+    function(in_fieldroot) {
+      out_l <- nafill_anthropo(in_gmeta_formatted, in_fieldroot) 
+      return(out_l)
+    }) %>%
+    mergeDTlist(dt_list=., by=c('grdc_no', 'year'), set_suffix = F)
+  
+  
+  gauges_sub <- anthropo_interpolated[
+    (dor_interp<=max_dor) &
+      (pop_interp<=max_pop) &
+      (crop_interp<=max_crop) & 
+      (built_interp<=max_built),]
+  
+  gauges_sub[, n_years := .N, by=grdc_no]
+  
+  ngauges <- gauges_sub[n_years >= 20, .N, by=year]  
+  ref_gauges_ts <- ggplot(ngauges, aes(x=year, y=N)) +
+    geom_line(linewidth=1.5) +
+    scale_y_log10(breaks=c(1, 10, 100, 1000, 2000, 3000)) +
+    theme_ridges()
+  
+  return(list(
+    dt = gauges_sub,
+    plot = ref_gauges_ts)
+  )
+}

@@ -64,8 +64,14 @@ list(
   ),
 
   tar_target(ref_gauges,
-             filter_reference_gauges(in_gmeta_formatted = gmeta_formatted)
-  ),
+             filter_reference_gauges(in_gmeta_formatted = gmeta_formatted,
+                                     max_dor = 2, #2% of mean annual flow regulated by a dam
+                                     max_crop = 25, #max 25% of upstream area cultivated
+                                     max_pop = 100, #max 100 people/km2 upstream
+                                     max_built = 1 #max 1% of upstream area is "built"
+                                     )  
+  )
+  #,
   
              
 )

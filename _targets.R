@@ -12,7 +12,7 @@ tar_option_set(format = "qs",
 
 
 #--- Parameters ---------------------------------------------------------------
-
+min_yrs = 20
 
 ############################# Define targets plan ##############################
 list(
@@ -32,23 +32,41 @@ list(
   )
   ,
   
+  tar_target(gaugep_dt,
+             vect(dirname(path_gaugep), layer=basename(path_gaugep)) %>%
+               as.data.table
+  ),
+  
   tar_target(g_anthropo_stats,
-             fread(path_gauges_anthropo_stats)
+             read_format_anthropo_stats(inp = path_gauges_anthropo_stats)
              )
   ,
-
-  tar_target(GRDCgauged_filenames,
+  tar_target(GRDC_filenames,
              read_GRDCgauged_paths(
                inp_GRDC_qdat_dir = path_GRDC_qdat_dir,
                in_GRDC_metadata = GRDC_metadata,
                inp_GIRES_metadata = path_GIRES_metadata,
-               inp_gaugep = path_gaugep
+               in_gaugep_dt = gaugep_dt
                ))
-  #,
-  # inp_GRDC_qdat_dir = tar_read(path_GRDC_qdat_dir)
-  # in_GRDC_metadata = tar_read(path_GRDC_metadata)
-  # inp_GIRES_metadata = tar_read(path_GIRES_metadata)
-  # inp_gaugep = tar_read(path_gaugep)
+  ,
+  tar_target(gmeta_formatted,
+             format_gauges_metadata(
+               in_GRDC_filenames = GRDC_filenames,
+               in_GRDC_metadata = GRDC_metadata,
+               in_gaugep_dt = gaugep_dt,
+               in_g_anthropo_stats = g_anthropo_stats,
+               min_yrs = min_yrs
+             ))
+  ,
+  
+  tar_target(anthropo_plot,
+             plot_anthropo_stats (in_gmeta_formatted = gmeta_formatted)
+  ),
+
+  tar_target(ref_gauges,
+             filter_reference_gauges(in_gmeta_formatted = gmeta_formatted)
+  ),
+  
              
 )
 

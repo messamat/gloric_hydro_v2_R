@@ -25,6 +25,36 @@ mergeDTlist <- function(dt_list, by = NULL, all = TRUE, sort = FALSE,
   
   return(out_merge)
 }
+#------ fread_cols -----------------
+#' fread columns
+#'
+#' Fast data.table-based reading of a subset of columns from a table
+#'
+#' @param file_name path of the table to be read
+#' @param cols_tokeep character vector, names of columns to read
+#'
+#' @return a data.table with the \code{cols_tokeep} that are found in the table
+#'
+#' @examples
+#' fread_cols(iris, c('Sepal.Length', 'Sepal.Width')
+#'
+#' @export
+fread_cols <- function(file_name, cols_tokeep) {
+  #Only read the first row from the file
+  header <- fread(file_name, nrows = 1, header = FALSE)
+  #Check which columns are in the table
+  keptcols <- cols_tokeep[cols_tokeep %chin% unlist(header)]
+  missingcols <- cols_tokeep[!(cols_tokeep %chin% unlist(header))]
+  paste('Importing', file_name, 'with ', length(keptcols),
+        'columns out of ', length(cols_tokeep), 'supplied column names')
+  #Reading in table
+  paste(missingcols, 'columns are not in the file...')
+  
+  dt <- fread(input=file_name, header=TRUE,
+              select=keptcols, verbose=TRUE, ...)
+  return(dt)
+}
+
 #------ readformatGRDC -----------------
 #' Read and pre-format GRDC data
 #'
@@ -224,6 +254,70 @@ read_format_anthropo_stats <- function(inp) {
 }
 
 
+#------ read_format_river_ice ------------------------------------------------------
+# inp_elv = tar_read(path_rivice_elv)
+# inp_ts = tar_read(path_rivice_ts)
+# inp_gtiles_join = tar_read(path_gauges_rivicetiles_join)
+read_format_rivice <- function(inp_elv, inp_ts, inp_gtiles_join) {
+  ts <- fread(inp_ts)
+  elv <- fread(inp_elv, select = c('PATH', 'ROW', 'mean_elv'))
+  gtiles_join <- fread(inp_gtiles_join, select = c('grdc_no', 'PATH', 'ROW'))
+  g_riverice_ts <- merge(gtiles_join, ts, 
+                         by=c('PATH', 'ROW'), all.x=T, allow.cartesian=TRUE) %>%
+    .[!is.na(river_ice_fraction),] %>%
+    merge(elv, by=c('PATH', "ROW")) %>%
+    .[, c('grdc_no', 'date', 'river_ice_fraction', 'N_river_pixel', 'mean_elv'),
+      with=F]
+  
+  check <- g_riverice_ts[, .N, by=grdc_no]
+  
+  return(g_riverice_ts)
+}
+
+#------ download_riggs2023 -----------------------------------------------------
+download_riggs2023 <- function(in_url, out_file) {
+  if (!(dir.exists(dirname(out_file)))) {
+    dir.create(dirname(out_file))
+  }
+  
+  #Download and unzip file
+  if (!file.exists(out_file)) {
+    options(timeout = max(300, getOption("timeout")))
+    #https://zenodo.org/records/7150168
+    download.file(url = 'https://zenodo.org/records/7150168/files/zenodo.zip',
+                  destfil = out_file,
+                  method='libcurl')
+    unzip(out_file)
+  }
+  
+  return(tools::file_path_sans_ext(out_file))
+}
+
+#------ format_riggs2023--------------------------------------------------------
+#in_dir <- tar_read(riggs2023_dirpath)
+format_riggs2023 <- function(in_dir) {
+  dat_dir <- file.path(in_dir, 'supplemented')
+  file_list <- list.files(dat_dir,
+                          pattern='^[0-9]{7}_GRDC.csv$',
+                          full.names=T)
+  
+  q_bind <- lapply(file_list, function(path) {
+    #print(path)
+    fread(path, 
+          select= c('ID', 'Date', 'RC'))
+  }) %>% rbindlist 
+  
+  return(q_bind)
+}
+
+
+#------ read_format_netdist ----------------------------------------------------
+
+fread(file.path(resdir, "grdc_p_o20y_cleanjoin_netdist_tab.dbf"))
+
+#------ read_format_geodist ----------------------------------------------------
+
+
 #------ format_gauges_metadata  ---------------------------------------
 # in_g_anthropo_stats = tar_read(g_anthropo_stats)
 # in_gaugep_dt = tar_read(gaugep_dt)
@@ -278,6 +372,7 @@ format_gauges_metadata <- function(
   
   return(gstats_merge_nodupli[, -c('grdc_match'), with=F])
 }
+
 
 #------ analyze_anthropo_stats -------------------------------------------------
 #in_gmeta_formatted = tar_read(gmeta_formatted)
@@ -433,4 +528,24 @@ filter_reference_gauges <- function(in_gmeta_formatted,
     dt = gauges_sub,
     plot = ref_gauges_ts)
   )
+}
+#------ prepare_QC_data --------------------------------------------------------
+in_ref_gauges = tar_read(ref_gauges)
+in_gmeta_formatted = tar_read(gmeta_formatted)
+  
+
+prepare_QC_data <- function(in_ref_gauges,
+                            in_gmeta_formatted) {
+  
+  #Compute euclidean and network distance
+  
+  #get terra climate data
+  
+  #identify gauges within 100-m from each other
+  
+  #initial value flag
+  
+  #train ARIMA model
+  
+  
 }

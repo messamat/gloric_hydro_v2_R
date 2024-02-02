@@ -55,6 +55,59 @@ fread_cols <- function(file_name, cols_tokeep) {
   return(dt)
 }
 
+#------ diny -----------------
+#' Number of days in the year
+#'
+#' Computes the number of days in a given year, taking in account leap years
+#'
+#' @param year Numeric or integer vector of the year (format: 4-digit year, %Y).
+#'
+#' @return Number of days in that year.
+#'
+#' @examples
+#' diny(1999)
+#' diny(2000)
+#' diny(2004)
+#' diny(2100)
+#' diny(1600)
+#'
+#' @export
+diny <- function(year) {
+  365 + (year %% 4 == 0) - (year %% 100 == 0) + (year %% 400 == 0)
+}
+
+#------ zero_lomf -----------------
+#' Last \[non-zero\] Observation Moved Forward (lomf)
+#'
+#' Finds the index, for each row, of the previous row with a non-zero value
+#'
+#' @param x Numeric vector.
+#' @param first (logical) Whether to consider first value as a non-zero value
+#'   whose index is moved forward even if it is zero. This prevents having NAs
+#'   in the results and somewhat assumes that, for a time series, the day prior
+#'   to the first value is non-zero.
+#'
+#' @return Numeric vector of the indices of the previous non-zero for each
+#'   element of the input vector.
+#'
+#' @examples
+#' test1 <- c(1,1,1,0,0,0,0,1,1)
+#' zero_lomf(test1)
+#' test2 <- c(0,0,0,0,0,1,1,0,1)
+#' zero_lomf(test2, first=FALSE)
+#' zero_lomf(test2, first=TRUE)
+#'
+#' @export
+zero_lomf <- function(x, first=TRUE) {
+  if (length(x) > 0) {
+    non.zero.idx <- which(x != 0)
+    if(first==T & x[1]==0)
+      non.zero.idx=c(1,non.zero.idx)
+    #Repeat index of previous row with non-zero as many times gap until next non-zero values
+    rep.int(non.zero.idx, diff(c(non.zero.idx, length(x) + 1)))
+  }
+}
+
 #------ readformatGRDC -----------------
 #' Read and pre-format GRDC data
 #'
@@ -68,34 +121,50 @@ fread_cols <- function(file_name, cols_tokeep) {
 #' @return \link[data.table]{data.table} of daily discharge data with additional columns
 #'
 #' @export
-readformatGRDC<- function(path) {
-  #extract GRDC unique ID by formatting path
-  gaugeno <- strsplit(basename(path), '[.]')[[1]][1]
-  
+readformatGRDC<- function(path, newformat=T) {
   #Read GRDC text data
-  gaugetab <- cbind(fread(path, header = T, skip = 40, sep=";",
-                          colClasses = c('character', 'character', 'numeric',
-                                         'numeric', 'integer')),
-                    GRDC_NO = gaugeno)%>%
-    setnames('YYYY-MM-DD', 'dates') %>%
-    setorder(GRDC_NO, dates)
-  
+  if (!newformat) {
+    #extract GRDC unique ID by formatting path
+    gaugeno <- strsplit(basename(path), '[.]')[[1]][1]
+    
+    gaugetab <- cbind(fread(path, header = T, skip = 40, sep=";",
+                            colClasses = c('character', 'character', 'numeric',
+                                           'numeric', 'integer')),
+                      grdc_no = gaugeno)%>%
+      setnames('YYYY-MM-DD', 'dates') %>%
+      setorder(grdc_no, dates)
+  } else {
+    #extract GRDC unique ID by formatting path
+    gaugeno <- strsplit(basename(path), '_')[[1]][1]
+    
+    gaugetab <- cbind(fread(path, header = T, skip = 36, sep=";",
+                            colClasses = c('character', 'character', 'numeric')),
+                      grdc_no = gaugeno) %>%
+      setnames(c('YYYY-MM-DD','Value'),
+               c('date', 'Qobs')) %>%
+      .[, -c('hh:mm'), with=F] %>%
+      setorder(grdc_no, date)
+  }
+
   #Format data
-  gaugetab[, `:=`(year = as.numeric(substr(dates, 1, 4)), #Create year column
-                  month = as.numeric(substr(dates, 6, 7)), #create month column
-                  integervalue = fifelse(Original == round(Original), 1, 0) #Flag integer discharge values]
+  gaugetab[, `:=`(year = as.numeric(substr(date, 1, 4)), #Create year column
+                  month = as.numeric(substr(date, 6, 7)), #create month column
+                  integervalue = fifelse(Qobs == round(Qobs), 1, 0) #Flag integer discharge values]
   )]
   
   #For each record, compute date of last non-zero flow day
-  gaugetab[, prevflowdate := gaugetab[zero_lomf(Original),'dates', with=F]] %>% #Get previous date with non-zero flow
-    .[Original != 0, prevflowdate:=NA] #If non-zero flow, set prevflowdate to NA
+  gaugetab[, prevflowdate := gaugetab[zero_lomf(Qobs),'date', with=F]] %>% #Get previous date with non-zero flow
+    .[Qobs != 0, prevflowdate:=NA] #If non-zero flow, set prevflowdate to NA
   
   #Compute number of missing days per year, excluding NoData values
-  gaugetab[!(Original %in% c(-999, -99, -9999, 99, 999, 9999) | is.na(Original)),
+  gaugetab[!(Qobs %in% c(-999, -99, -9999, 99, 999, 9999) | is.na(Qobs)),
            `:=`(missingdays = diny(year)-.N,
                 datadays = .N),
            by= 'year']
   
+  gaugetab[(Qobs %in% c(-999, -99, -9999, 99, 999, 9999)),
+           Qobs := NA]
+
   return(gaugetab)
 }
 
@@ -242,15 +311,17 @@ read_format_anthropo_stats <- function(inp) {
   #Check for NAs
   stats_raw[, sapply(.SD, function(x) sum(is.na(x)))]
   dor_cols = col_dt[repl=='dor',new]
-  stats_raw[, 
-            (col_dt[repl=='dor',new]) := sapply(
-              .SD, function(x) fifelse(is.na(x), 0, x),
-              simplify=F),
-            .SDcols = dor_cols,
-            by='grdc_no']
-  
+  out_dt <- stats_raw[, 
+                      (col_dt[repl=='dor',new]) := sapply(
+                        .SD, function(x) fifelse(is.na(x), 0, x),
+                        simplify=F),
+                      .SDcols = dor_cols,
+                      by='grdc_no']
   #The other NAs are from Mauritius and Hawaii because of the HydroSHEDS landmask
   
+  out_dt[, grdc_no := as.character(grdc_no)]
+  
+  return(out_dt)
 }
 
 
@@ -269,7 +340,7 @@ read_format_rivice <- function(inp_elv, inp_ts, inp_gtiles_join) {
     .[, c('grdc_no', 'date', 'river_ice_fraction', 'N_river_pixel', 'mean_elv'),
       with=F]
   
-  check <- g_riverice_ts[, .N, by=grdc_no]
+  g_riverice_ts[, grdc_no := as.character(grdc_no)]
   
   return(g_riverice_ts)
 }
@@ -307,16 +378,12 @@ format_riggs2023 <- function(in_dir) {
           select= c('ID', 'Date', 'RC'))
   }) %>% rbindlist 
   
+  setnames(q_bind, c('ID', 'Date', 'RC'), c('grdc_no', 'date', 'Qmod'))
+  
+  q_bind[, grdc_no := as.character(grdc_no)]
+  
   return(q_bind)
 }
-
-
-#------ read_format_netdist ----------------------------------------------------
-
-fread(file.path(resdir, "grdc_p_o20y_cleanjoin_netdist_tab.dbf"))
-
-#------ read_format_geodist ----------------------------------------------------
-
 
 #------ format_gauges_metadata  ---------------------------------------
 # in_g_anthropo_stats = tar_read(g_anthropo_stats)
@@ -336,6 +403,8 @@ format_gauges_metadata <- function(
                         by='grdc_no') %>%
     merge(in_gaugep_dt, 
           by.x='grdc_no_old', by.y='grdc_no') %>%
+    .[, `:=`(grdc_no = as.character(grdc_no),
+             grdc_no_old = as.character(grdc_no_old))] %>%
     merge(in_g_anthropo_stats, 
           by.x='grdc_no_old', by.y='grdc_no') %>%
     .[, -c('exists', 'wmo_reg', 'lat', 'long', 'Join_Count', 
@@ -369,10 +438,10 @@ format_gauges_metadata <- function(
       .SD, function(x) x/100, simplify=F),
     .SDcols=built_cols]
   
+  gstats_merge_nodupli[, grdc_no := as.character(grdc_no)]
   
   return(gstats_merge_nodupli[, -c('grdc_match'), with=F])
 }
-
 
 #------ analyze_anthropo_stats -------------------------------------------------
 #in_gmeta_formatted = tar_read(gmeta_formatted)
@@ -516,7 +585,9 @@ filter_reference_gauges <- function(in_gmeta_formatted,
       (crop_interp<=max_crop) & 
       (built_interp<=max_built),]
   
-  gauges_sub[, n_years := .N, by=grdc_no]
+  gauges_sub[, `:=`(n_years = .N,
+                    grdc_no = as.character(grdc_no)),
+             by=grdc_no]
   
   ngauges <- gauges_sub[n_years >= 20, .N, by=year]  
   ref_gauges_ts <- ggplot(ngauges, aes(x=year, y=N)) +
@@ -530,22 +601,60 @@ filter_reference_gauges <- function(in_gmeta_formatted,
   )
 }
 #------ prepare_QC_data --------------------------------------------------------
-in_ref_gauges = tar_read(ref_gauges)
-in_gmeta_formatted = tar_read(gmeta_formatted)
-  
-
-prepare_QC_data <- function(in_ref_gauges,
-                            in_gmeta_formatted) {
-  
-  #Compute euclidean and network distance
-  
-  #get terra climate data
-  
-  #identify gauges within 100-m from each other
-  
-  #initial value flag
-  
-  #train ARIMA model
-  
-  
-}
+# in_ref_gauges = tar_read(ref_gauges)
+# in_gmeta_formatted = tar_read(gmeta_formatted)
+# in_geodist = tar_read(geodist)
+# in_netdist = tar_read(netdist)
+# in_tmax = tar_read(gauges_tmax)
+# #in_pdsi_dir = tar_read(pdsi_dir)
+# in_rivice = tar_read(rivice_dt)
+# in_riggs2023 = tar_read(riggs2023_dt)
+# 
+# 
+# prepare_QC_data_util <- function(
+#     
+#   )
+# 
+# prepare_QC_data <- function(in_ref_gauges,
+#                             in_gmeta_formatted,
+#                             in_geodist,
+#                             in_netdist,
+#                             in_tmax,
+#                             in_rivice,
+#                             in_riggs2023) {
+#   gauges_anthropo <- in_ref_gauges$dt %>%
+#     .[, grdc_no := as.character(grdc_no)]
+#     
+#   
+#   in_grdc_no <- 1634700
+#   
+#   
+#   filepath <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
+#   q_dt <- readformatGRDC(filepath)
+#   
+#   q_dt_attri <- merge(q_dt, #merge anthropo data
+#                       gauges_anthropo[, -c('n_years'), with=F],
+#                       by=c('grdc_no','year'),
+#                       all.x=T
+#                       ) %>%
+#     merge(in_tmax[grdc_no == in_grdc_no],
+#           by.x=c('grdc_no', 'date'), by.y=c('grdc_no', 'time'))
+#   
+#   t_max_g <- 
+#   
+#   
+#   in_netdist[grdc_no ==in_grdc_no,]
+#   in_geodist[grdc_no ==in_grdc_no,]
+#   
+#   q_dt
+#   
+#   #get terra climate data
+#   
+#   #identify gauges within 100-m from each other
+#   
+#   #initial value flag
+#   
+#   #train ARIMA model
+#   
+#   
+# }

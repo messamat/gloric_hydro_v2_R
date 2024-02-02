@@ -54,7 +54,7 @@ list(
   )
   ,
   
-  tar_tar(riggs2023_dt,
+  tar_target(riggs2023_dt,
           format_riggs2023(riggs2023_dirpath)
   )
   ,
@@ -69,7 +69,7 @@ list(
   tar_target(gauges_tmin,
              fread(path_gauges_tmin,
                    select= c('grdc_no', 'time', 'tmin'),
-                   colClasses= c('integer', 'date', 'integer', 'numeric')
+                   colClasses= c('character', 'date', 'integer', 'numeric')
              )
   )
   ,
@@ -77,8 +77,27 @@ list(
   tar_target(gauges_tmax,
              fread(path_gauges_tmax,
                    select= c('grdc_no', 'time', 'tmax'),
-                   colClasses= c('integer', 'date', 'integer', 'numeric')
+                   colClasses= c('character', 'date', 'integer', 'numeric')
              )
+  )
+  ,
+  
+  tar_target(netdist,
+          fread(path_gauge_netdist) %>%
+            .[, (c('grdc_no', 'grdc_no_destination')) := 
+                tstrsplit(Name, ' - ')]  %>%
+            .[, c('grdc_no', 'grdc_no_destination', 'Total_Leng', 'travel_mod'),
+              with=F] %>%
+            setnames(c('Total_Leng', 'travel_mod'), c('dist_net', 'dist_net_dir'))
+  )
+  ,
+  
+  tar_target(geodist,
+             fread(path_gauge_geodist) %>%
+               .[, c('grdc_no_origin', 'grdc_no_destination', 
+                     'NEAR_DIST', 'NEAR_RANK')] %>%
+               setnames(c('grdc_no_origin', 'NEAR_DIST'),
+                        c('grdc_no', 'dist_geo'))
   )
   ,
   
@@ -119,12 +138,18 @@ list(
                                      max_built = 1 #max 1% of upstream area is "built"
              )  
   )
-  ,
-  tar_target(data_for_qc,
-             prepare_QC_data(in_ref_gauges = ref_gauges,
-                             in_gmeta_formatted = gmeta_formatted
-             )  
-  )
+  # ,
+  # tar_target(data_for_qc,
+  #            prepare_QC_data(in_ref_gauges = ref_gauges,
+  #                            in_gmeta_formatted = gmeta_formatted,
+  #                            in_geodist = geodist,
+  #                            in_netdist = netdist,
+  #                            in_tmax = gauges_tmax,
+  #                            #in_pdsi_dir = pdsi_dir,
+  #                            in_rivice = rivice_dt,
+  #                            in_riggs2023 = riggs2023_dt
+  #            )  
+  # )
   
   
 )

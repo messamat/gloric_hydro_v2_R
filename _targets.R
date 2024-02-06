@@ -23,11 +23,12 @@ list(
   tar_target(path_gaugep, file.path(resdir, 'stations_preprocess.gdb', paste0('grdc_p_o', min_yrs, 'y_cleanjoin'))),
   tar_target(url_riggs2023, "https://zenodo.org/records/7150168/files/zenodo.zip", format='url'),
   
-  tar_target(path_gauge_netdist, file.path(resdir, 'grdc_p_o20y_cleanjoin_netdist_tab.csv')), # format='file')
+  tar_target(path_gauge_netdist, file.path(resdir, 'grdc_p_o20y_cleanjoin_netdist_tab.csv')), # format='file'),
   tar_target(path_gauge_geodist, file.path(resdir, 'grdc_p_o20y_cleanjoin_geodist_tab.csv')), # format='file')
   
   tar_target(path_gauges_anthropo_stats, file.path(resdir, 'stations_anthropo_stats_upst.csv')), # format='file')
   
+  tar_target(path_gauges_pdsi, file.path(resdir, 'terra', 'PDSI.csv')), #format='file')
   tar_target(path_gauges_tmin, file.path(resdir, 'grdc_p_o20y_cleanjoin_terra_tmin.csv')), # format='file')
   tar_target(path_gauges_tmax, file.path(resdir, 'grdc_p_o20y_cleanjoin_terra_tmax.csv')), # format='file')
   tar_target(path_rivice_elv, file.path(resdir, 'landsat_grdc_p_o20y_clean_sub_elvstats.csv')), # format='file')
@@ -54,12 +55,12 @@ list(
   )
   ,
   
-  tar_target(riggs2023_dt,
+  tar_target(gauges_satQ,
           format_riggs2023(riggs2023_dirpath)
   )
   ,
   
-  tar_target(rivice_dt,
+  tar_target(gauges_rivice,
              read_format_rivice(inp_elv=path_rivice_elv,
                                 inp_ts=path_rivice_ts,
                                 inp_gtiles_join=path_gauges_rivicetiles_join)
@@ -82,6 +83,19 @@ list(
   )
   ,
   
+  tar_target(gauges_pdsi,
+              fread(path_gauges_pdsi) %>%
+               melt(id.vars = 'grdc_no',
+                    measure.vars = grep('PDSI_.*', names(.), value=T),
+                    value.name = 'PDSI'
+               ) %>%
+               .[, `:=`(date=as.character(as.Date(gsub('PDSI_', '', variable),
+                                                  '%Y%m%d')),
+                        grdc_no=as.character(grdc_no))] %>%
+               .[, -'variable', with=F]
+  )
+  ,
+             
   tar_target(netdist,
           fread(path_gauge_netdist) %>%
             .[, (c('grdc_no', 'grdc_no_destination')) := 
@@ -138,19 +152,31 @@ list(
                                      max_built = 1 #max 1% of upstream area is "built"
              )  
   )
-  # ,
-  # tar_target(data_for_qc,
-  #            prepare_QC_data(in_ref_gauges = ref_gauges,
-  #                            in_gmeta_formatted = gmeta_formatted,
-  #                            in_geodist = geodist,
-  #                            in_netdist = netdist,
-  #                            in_tmax = gauges_tmax,
-  #                            #in_pdsi_dir = pdsi_dir,
-  #                            in_rivice = rivice_dt,
-  #                            in_riggs2023 = riggs2023_dt
-  #            )  
-  # )
+  ,
+  tar_target(data_for_qc,
+             prepare_QC_data_util(in_grdc_no=1634700,
+                                  in_ref_gauges=ref_gauges,
+                                  in_gmeta_formatted=gmeta_formatted,
+                                  #in_geodist,
+                                  in_netdist=netdist,
+                                  in_tmax=gauges_tmax,
+                                  in_pdsi=gauges_pdsi,
+                                  in_rivice=gauges_rivice,
+                                  in_riggs2023=gauges_satQ)
+  )
+  ,
   
+  tar_target(outlier_plot,
+             plotGRDCtimeseries(GRDCgaugestats_record=data_for_qc,
+                                outpath=NULL, 
+                                maxgap = 366,  
+                                showmissing = T)
+             )
+  ,
   
+  #Remove outliers
+  tar_target()
+  
+  #Fill small gaps
 )
 

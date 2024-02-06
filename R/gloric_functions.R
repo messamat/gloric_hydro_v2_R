@@ -131,8 +131,8 @@ readformatGRDC<- function(path, newformat=T) {
                             colClasses = c('character', 'character', 'numeric',
                                            'numeric', 'integer')),
                       grdc_no = gaugeno)%>%
-      setnames('YYYY-MM-DD', 'dates') %>%
-      setorder(grdc_no, dates)
+      setnames('YYYY-MM-DD', 'date') %>%
+      setorder(grdc_no, date)
   } else {
     #extract GRDC unique ID by formatting path
     gaugeno <- strsplit(basename(path), '_')[[1]][1]
@@ -184,6 +184,151 @@ melt_anthropo_stats <- function(in_dt, fieldroot,
   dt_formatted[, n := .N, by=year]
   return(dt_formatted)
 }
+#------ flagGRDCoutliers ------
+#' Flag GRDC outliers
+#'
+#' Flag potential outliers in daily discharge records for a given GRDC gauging
+#' station following the criteria developed for GSIM by
+#' [Gudmundsson et al. (2018)](https://essd.copernicus.org/articles/10/787/2018/).
+#'
+#' @param in_gaugetab \link[data.table]{data.table} containing formatted daily
+#' discharge record from GRDC gauging station (as formatted by \code{\link{readformatGRDC}}.
+#'
+#' @details Criteria to flag a daily discharge value (Qt) as a potential outlier include:
+#' \itemize{
+#'   \item Negative values (Qt < 0)
+#'   \item At least ten identical consecutive discharge values (for Qt > 0)
+#'   \item |log(Qt + 0.01) - mean| are larger than the mean values of log(Q + 0.01)
+#'   plus or minus 6 times the standard deviation of log(Q + 0.01) computed for
+#'   that calendar day for the entire length of the series. The mean and SD are
+#'   computed for a 5-day window centred on the calendar day to ensure that a
+#'   sufficient amount of data is considered. The log-transformation is used to
+#'   account for the skewness of the distribution of daily streamflow values.
+#'   \item Qt for which Qobs != Calculated discharge in GRDC record
+#' }
+#'
+#' @return \link[data.table]{data.table} of daily discharge records with additional
+#' columns for outlier flags
+#'
+#' @source Gudmundsson, L., Do, H. X., Leonard, M., & Westra, S. (2018). The Global
+#'   Streamflow Indices and Metadata Archive (GSIM) – Part 2: Quality control,
+#'   time-series indices and homogeneity assessment. Earth System Science Data,
+#'   10(2), 787–804. https://doi.org/10.5194/essd-10-787-2018
+#'
+#' @export
+flagGRDCoutliers <- function(in_gaugetab) {
+  in_gaugetab[, `:=`(jday = format(as.Date(date), '%j'),#Julian day
+                     q_rleid = rleid(Qobs),#Identify each group of consecutive values
+                     flag_mathis = 0)] #Create flag field)
+  
+  #Flag negative values
+  in_gaugetab[Qobs < 0, flag_mathis := flag_mathis + 1]
+  
+  #Flag when more than 10 identical values in a row or when a single zero-flow
+  in_gaugetab[, flag_mathis := flag_mathis +
+                ((Qobs > 0) & (.N > 10)) +
+                ((Qobs == 0) & (.N == 1)),
+              by=q_rleid]
+  
+  #Flag |log(Q + 0.01) - mean| > 6SD for julian day mean and SD of 5d mean of log(Q + 0.01)
+  in_gaugetab[, logmean5d := frollapply(log(Qobs + 0.01), n = 5, align='center',
+                                        FUN=mean, na.rm = T)] %>% #Compute 5-day mean of log(Q+0.01)
+    .[, `:=`(jdaymean = mean(logmean5d, na.rm = T),
+             jdaysd = sd(logmean5d, na.rm = T)),
+      by = jday] %>% #Compute mean and SD of 5-day mean of log(Q + 0.01) by Julian day
+    .[abs(log(Qobs + 0.01) - jdaymean) > (6 * jdaysd),
+      flag_mathis := flag_mathis + 1]
+
+  return(in_gaugetab)
+}
+
+#------ plotGRDCtimeseries ----------------------
+#' Plot a GRDC time series
+#'
+#' Creates a plot of daily discharge ({m^3}/s) for a GRDC gauging station,
+#' with flags for 0-flow values and potential outliers.
+#' Save plot to png if path is provided.
+#'
+#' @param GRDCgaugestats_record \link[data.table]{data.table} of formatted daily
+#' discharge records for a single GRDC station. In this project, e.g. the output
+#' from \code{\link{comp_GRDCdurfreq}}. Must contain at least five columns:
+#' \code{GRDC_NO, date, Qobs, flag_mathis, missingdays} \cr
+#' Alternatively, a named list or vector with
+#' a column called "path" towards a standard GRDC text file containing daily discharge
+#' records for a single gauging station.
+#' @param outpath (character) path for writing output png plot (default is no plotting).
+#' @param maxgap (integer) threshold number of missing daily records to consider a calendar year unfit for analysis.
+#' @param showmissing (logical) whether to show records in years with number of missing daily records beyond \code{maxgap}.
+#'
+#' @details the output graphs show the time series of daily streamflow values
+#' for the station. For the flagging criteria, see documentation for \code{\link{flagGRDCoutliers}}.
+#' \itemize{
+#'   \item The y-axis is square-root transformed.
+#'   \item Individual points show daily discharge values (in {m^3}/s).
+#'   \item blue lines link daily values (which may result in unusual patterns due to missing years).
+#'   \item red points are zero-flow flow values.
+#'   \item green points are non-zero flow daily values statistically flagged as potential outliers .
+#'   \item black points are zero-flow values flagged as potential outliers.
+#' }
+#'
+#' @return plot
+#'
+#' @export
+plotGRDCtimeseries <- function(GRDCgaugestats_record,
+                               outpath=NULL, maxgap = 366,  showmissing = FALSE) {
+  #Read and format discharge records
+  if (GRDCgaugestats_record[,.N>1] &
+      ('Qobs' %in% names(GRDCgaugestats_record))) {
+    gaugetab <- GRDCgaugestats_record
+  } else {
+    gaugetab <- readformatGRDC(GRDCgaugestats_record$path) %>%
+      flagGRDCoutliers %>%
+      .[, date := as.Date(date)] %>%
+      .[!is.na(Qobs), missingdays := diny(year)-.N, by= 'year']
+  }
+  
+  #Plot time series
+  qtiles <- union(gaugetab[, min(Qobs, na.rm=T)],
+                  gaugetab[, quantile(Qobs, probs=seq(0, 1, 0.1), na.rm=T)])
+  
+  subgaugetab <- gaugetab[missingdays < maxgap,]
+  
+  rawplot <- ggplot(subgaugetab[missingdays < maxgap,],
+                    aes(x=date, y=Qobs)) +
+    geom_line(color='#045a8d', size=1, alpha=1/5) +
+    geom_point(data = subgaugetab[flag_mathis == 0 & Qobs > 0,],
+               color='#045a8d', size=1, alpha=1/3) +
+    geom_point(data = subgaugetab[flag_mathis > 0 & Qobs > 0,],
+               color='green') +
+    geom_point(data = subgaugetab[flag_mathis == 0 & Qobs == 0,],
+               color='red') +
+    geom_point(data = subgaugetab[flag_mathis > 0 & Qobs == 0,],
+               color='black') +
+    scale_y_sqrt(breaks=qtiles, labels=qtiles) +
+    scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+    labs(y='Discharge (m3/s)',
+         title=paste0('GRDC: ', GRDCgaugestats_record$grdc_no)) +
+    coord_cartesian(expand=0, clip='off')+
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust=1),
+          axis.text.y = element_text())
+  
+  if (showmissing) {
+    rawplot <- rawplot +
+      geom_point(data=gaugetab[missingdays >= maxgap,], color='black', alpha=1/10)
+  }
+  
+  if (!is.null(outpath)) {
+    if (!(file.exists(outpath))) {
+      ggsave(filename = outpath, plot = rawplot, device = 'png',
+             width = 10, height = 10, units='in', dpi = 300)
+    }
+  } else {
+    return(rawplot)
+  }
+}
+
+
 ############################ ANALYSIS FUNCTIONS ##################################
 #------ read_GRDCgauged_paths -----------------
 #' Read file paths to streamflow data from GRDC gauging stations
@@ -192,11 +337,11 @@ melt_anthropo_stats <- function(in_dt, fieldroot,
 #' associated with gauges.
 #'
 #' @param inp_GRDC_qdat_dir path to directory containing streamflow data GRDC standard files.
-#' @param in_gaugep table containing column named \code{GRDC_NO} with the
+#' @param in_gaugep table containing column named \code{grdc_no} with the
 #' gauge IDs that will be used to generate file path.
 #'
 #' @return vector of paths to GRDC-formatted streamflow time series tables, assuming
-#' that files are called "GRDC_NO.txt", GRDC_NO being replaced with a 7-digit integer.
+#' that files are called "grdc_no.txt", GRDC_NO being replaced with a 7-digit integer.
 #'
 #' @export
 
@@ -340,7 +485,9 @@ read_format_rivice <- function(inp_elv, inp_ts, inp_gtiles_join) {
     .[, c('grdc_no', 'date', 'river_ice_fraction', 'N_river_pixel', 'mean_elv'),
       with=F]
   
-  g_riverice_ts[, grdc_no := as.character(grdc_no)]
+  g_riverice_ts[, `:=`(grdc_no = as.character(grdc_no),
+                       date = as.character(date)
+  )]
   
   return(g_riverice_ts)
 }
@@ -380,7 +527,9 @@ format_riggs2023 <- function(in_dir) {
   
   setnames(q_bind, c('ID', 'Date', 'RC'), c('grdc_no', 'date', 'Qmod'))
   
-  q_bind[, grdc_no := as.character(grdc_no)]
+  q_bind[, `:=`(grdc_no =as.character(grdc_no),
+                date=as.character(date)
+                )]
   
   return(q_bind)
 }
@@ -443,7 +592,7 @@ format_gauges_metadata <- function(
   return(gstats_merge_nodupli[, -c('grdc_match'), with=F])
 }
 
-#------ analyze_anthropo_stats -------------------------------------------------
+#------ plot_anthropo_stats -------------------------------------------------
 #in_gmeta_formatted = tar_read(gmeta_formatted)
 
 plot_anthropo_stats <- function(in_gmeta_formatted) {
@@ -606,55 +755,83 @@ filter_reference_gauges <- function(in_gmeta_formatted,
 # in_geodist = tar_read(geodist)
 # in_netdist = tar_read(netdist)
 # in_tmax = tar_read(gauges_tmax)
-# #in_pdsi_dir = tar_read(pdsi_dir)
+# in_pdsi = tar_read(gauges_pdsi)
 # in_rivice = tar_read(rivice_dt)
 # in_riggs2023 = tar_read(riggs2023_dt)
-# 
-# 
-# prepare_QC_data_util <- function(
-#     
-#   )
-# 
-# prepare_QC_data <- function(in_ref_gauges,
-#                             in_gmeta_formatted,
-#                             in_geodist,
-#                             in_netdist,
-#                             in_tmax,
-#                             in_rivice,
-#                             in_riggs2023) {
-#   gauges_anthropo <- in_ref_gauges$dt %>%
-#     .[, grdc_no := as.character(grdc_no)]
-#     
-#   
-#   in_grdc_no <- 1634700
-#   
-#   
-#   filepath <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
-#   q_dt <- readformatGRDC(filepath)
-#   
-#   q_dt_attri <- merge(q_dt, #merge anthropo data
-#                       gauges_anthropo[, -c('n_years'), with=F],
-#                       by=c('grdc_no','year'),
-#                       all.x=T
-#                       ) %>%
-#     merge(in_tmax[grdc_no == in_grdc_no],
-#           by.x=c('grdc_no', 'date'), by.y=c('grdc_no', 'time'))
-#   
-#   t_max_g <- 
-#   
-#   
-#   in_netdist[grdc_no ==in_grdc_no,]
-#   in_geodist[grdc_no ==in_grdc_no,]
-#   
-#   q_dt
-#   
-#   #get terra climate data
-#   
-#   #identify gauges within 100-m from each other
-#   
-#   #initial value flag
-#   
-#   #train ARIMA model
-#   
-#   
-# }
+
+prepare_QC_data_util <- function(in_grdc_no,
+                                 in_ref_gauges,
+                                 in_gmeta_formatted,
+                                 #in_geodist,
+                                 in_netdist,
+                                 in_tmax,
+                                 in_pdsi,
+                                 in_rivice,
+                                 in_riggs2023) {
+    #Pre-format anthropo data
+    gauges_anthropo <- in_ref_gauges$dt %>%
+    .[, grdc_no := as.character(grdc_no)]
+
+  #Get basic metadata and discharge observations
+  filepath <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
+  q_dt <- readformatGRDC(filepath)
+  
+  
+  #Get discharge  data from upstream and downstream gauges
+  netnear_gauges <- in_netdist[grdc_no ==in_grdc_no,]
+  #geonear_gauges <- in_geodist[grdc_no ==in_grdc_no,]
+  
+  get_nearg_qobs <- function(in_grdc_no, in_direction){
+    path_up <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
+    q_up <- readformatGRDC(path_up) %>%
+      .[, c('date', 'Qobs'), with=F] 
+    return(q_up)
+  }
+  
+  near_gaugesq <- netnear_gauges[
+    , get_nearg_qobs(in_grdc_no=grdc_no_destination, 
+                     in_direction=dist_net_dir)
+    , by=c('grdc_no_destination', 'dist_net_dir')]%>%
+    .[, colname := paste0('Qobs_', dist_net_dir, '_', grdc_no_destination)] %>%
+    dcast(date~colname,
+          value.var='Qobs'
+    )
+  
+  #Merge all data
+  q_dt_attri <- merge(q_dt, #merge anthropo data
+                      gauges_anthropo[, -c('n_years'), with=F],
+                      by=c('grdc_no','year'),
+                      all.x=T
+  ) %>%
+    merge(in_tmax[grdc_no == in_grdc_no], #merge tmax
+          by.x=c('grdc_no', 'date'), by.y=c('grdc_no', 'time'),
+          all.x=T) %>%
+    merge(in_pdsi[grdc_no == in_grdc_no,], #merge upstream average PDSI
+          by=c('grdc_no', 'date'),
+          all.x=T
+    ) %>%
+    merge(in_riggs2023[grdc_no == in_grdc_no,], #merge Riggs satellite-base discharge
+          by=c('grdc_no', 'date'),
+          all.x=T
+    ) %>%
+    merge(in_rivice[grdc_no == in_grdc_no, -'mean_elv',with=F],
+          by=c('grdc_no', 'date'),
+          all.x=T
+    ) %>%
+    merge(near_gaugesq, by='date', all.x=T) %>%
+    .[, date := as.Date(date)]
+  
+  #Format a few columns
+  q_dt_attri[date > as.Date('1958-01-01'), 
+             `:=`(
+               tmax = nafill(tmax, type="locf"),
+               PDSI = nafill(PDSI, type="nocb")
+             )]
+  
+  #initial value flag
+  flagGRDCoutliers(q_dt_attri)
+  
+  return(q_dt_attri)
+}
+
+

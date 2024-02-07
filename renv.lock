@@ -734,6 +734,26 @@
       ],
       "Hash": "7ede2ee9ea8d3edbf1ca84c1e333ad1a"
     },
+    "distributional": {
+      "Package": "distributional",
+      "Version": "0.3.2",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "digest",
+        "farver",
+        "generics",
+        "ggplot2",
+        "lifecycle",
+        "numDeriv",
+        "rlang",
+        "scales",
+        "stats",
+        "utils",
+        "vctrs"
+      ],
+      "Hash": "0a94c3c917918a1c90f4609171ff41b6"
+    },
     "dplyr": {
       "Package": "dplyr",
       "Version": "1.1.4",
@@ -858,6 +878,31 @@
       ],
       "Hash": "a861555ddec7451c653b40e713166c6f"
     },
+    "fabletools": {
+      "Package": "fabletools",
+      "Version": "0.3.4",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "R6",
+        "distributional",
+        "dplyr",
+        "generics",
+        "ggplot2",
+        "lifecycle",
+        "progressr",
+        "rlang",
+        "stats",
+        "tibble",
+        "tidyr",
+        "tidyselect",
+        "tsibble",
+        "utils",
+        "vctrs"
+      ],
+      "Hash": "025c5b49246221a17a646329f45b5abc"
+    },
     "factoextra": {
       "Package": "factoextra",
       "Version": "1.0.7",
@@ -904,6 +949,31 @@
       "Source": "Repository",
       "Repository": "CRAN",
       "Hash": "f7736a18de97dea803bde0a2daaafb27"
+    },
+    "feasts": {
+      "Package": "feasts",
+      "Version": "0.3.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "dplyr",
+        "fabletools",
+        "ggplot2",
+        "grid",
+        "gtable",
+        "lifecycle",
+        "lubridate",
+        "rlang",
+        "scales",
+        "slider",
+        "tibble",
+        "tidyr",
+        "tsibble",
+        "utils",
+        "vctrs"
+      ],
+      "Hash": "4e2130fecd2802de19c69d129abab1db"
     },
     "flashClust": {
       "Package": "flashClust",
@@ -1931,6 +2001,18 @@
       ],
       "Hash": "f4625e061cb2865f111b47ff163a5ca6"
     },
+    "progressr": {
+      "Package": "progressr",
+      "Version": "0.14.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "digest",
+        "utils"
+      ],
+      "Hash": "ac50c4ffa8f6a46580dd4d7813add3c4"
+    },
     "promises": {
       "Package": "promises",
       "Version": "1.2.1",
@@ -2333,6 +2415,20 @@
         "xtable"
       ],
       "Hash": "3a1f41807d648a908e3c7f0334bf85e6"
+    },
+    "slider": {
+      "Package": "slider",
+      "Version": "0.3.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "cli",
+        "rlang",
+        "vctrs",
+        "warp"
+      ],
+      "Hash": "a584625e2b9e4fad4be135c8ea5c99aa"
     },
     "sourcetools": {
       "Package": "sourcetools",
@@ -2829,6 +2925,16 @@
         "tibble"
       ],
       "Hash": "c7d3fd6d29ab077cbac8f0e2751449e6"
+    },
+    "warp": {
+      "Package": "warp",
+      "Version": "0.2.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R"
+      ],
+      "Hash": "fea474d578b1cbcb696ae6ac8bdcc439"
     },
     "withr": {
       "Package": "withr",

@@ -2387,38 +2387,38 @@ format_gaugestats <- function(in_gaugestats, in_gaugep, yearthresh) {
 # }
 
 
-# #Develop ARIMAX model with Fourier series added as external regressors to model the seasonal pattern
-# #and precipitation as a second external regressor.ARIMA (in R at least) cannot model seasonal periods > 350.
-# #Inspired from https://robjhyndman.com/hyndsight/longseasonality/
-# #and https://robjhyndman.com/hyndsight/forecasting-weekly-data/
-# ts1KA41 <- msts(precip1KA41sub[, 'Flow'],seasonal.periods=365.25)
-# bestfit <- list(aicc=Inf)
-# for(i in 1:50) #Select the number of Fourier series by minimizing AIC 
-# {
-#   fit <- auto.arima(ts1KA41, seasonal=FALSE, xreg=cbind(fourier(ts1KA41, K=i), precip1KA41sub[, 'Precip']))
-#   if(fit$aicc < bestfit$aicc){
-#     print(i)
-#     bestfit <- fit #Keep model with lowest AIC
-#   }else {break};
-# }
-# kr <- KalmanSmooth(ts1KA41, bestfit$model) #Impute missing values with Kalman Smoother (from https://stats.stackexchange.com/questions/104565/how-to-use-auto-arima-to-impute-missing-values)
-# id.na <- which(is.na(ts1KA41) & precip1KA41sub$gap<274) #Limit to gaps < 9 months
-# pred <- ts1KA41
-# for (i in id.na)
-#   pred[i] <- bestfit$model$Z %*% kr$smooth[i,]
-# precip1KA41sub[id.na,'Flow'] <- pred[id.na] #Replace NA values in the time series by predicted values
-# precip1KA41sub[precip1KA41sub$Flow<0.05 & !is.na(precip1KA41sub$Flow),'Flow'] <- 0 #For values < 0 and improbably low values, replace with 0
-# ggplot(precip1KA41sub[,], aes(x=Date, y=Flow)) + geom_point() + #Plot result
-#   geom_point(data=precip1KA41sub[id.na,], color='red')
-# 
-# ggplot(precip1KA41sub[,], aes(x=Date, y=Flow, color=gap)) + geom_point() +
-#   scale_colour_distiller(name='Gap (years)',palette='Spectral',breaks=seq(0,365.25,30),
-#                          limits=c(min(precip1KA41sub$gap),max(precip1KA41sub$gap)))#Plot result
-# 
-# impute_preds2 <- merge(impute_preds, precip1KA41sub[,c('Date','Flow')], by='Date', all.x=T)
-# impute_preds2[impute_preds2$Date>mindate & impute_preds2$Date<maxdate,'1KA41'] <- impute_preds2[impute_preds2$Date>mindate & impute_preds2$Date<maxdate,'Flow']
-# impute_preds2 <- impute_preds2[,-which(colnames(impute_preds2)=='Flow')]
-# impute_preds2[impute_preds2$gap_1KA41>=37 & impute_preds2$gap_1KA41<274 & !is.na(impute_preds2$gap_1KA41), 'source_1KA41'] <- 'ARIMAX_interpolated'
+#Develop ARIMAX model with Fourier series added as external regressors to model the seasonal pattern
+#and precipitation as a second external regressor.ARIMA (in R at least) cannot model seasonal periods > 350.
+#Inspired from https://robjhyndman.com/hyndsight/longseasonality/
+#and https://robjhyndman.com/hyndsight/forecasting-weekly-data/
+ts1KA41 <- msts(precip1KA41sub[, 'Flow'],seasonal.periods=365.25)
+bestfit <- list(aicc=Inf)
+for(i in 1:50) #Select the number of Fourier series by minimizing AIC
+{
+  fit <- auto.arima(ts1KA41, seasonal=FALSE, xreg=cbind(fourier(ts1KA41, K=i), precip1KA41sub[, 'Precip']))
+  if(fit$aicc < bestfit$aicc){
+    print(i)
+    bestfit <- fit #Keep model with lowest AIC
+  }else {break};
+}
+kr <- KalmanSmooth(ts1KA41, bestfit$model) #Impute missing values with Kalman Smoother (from https://stats.stackexchange.com/questions/104565/how-to-use-auto-arima-to-impute-missing-values)
+id.na <- which(is.na(ts1KA41) & precip1KA41sub$gap<274) #Limit to gaps < 9 months
+pred <- ts1KA41
+for (i in id.na)
+  pred[i] <- bestfit$model$Z %*% kr$smooth[i,]
+precip1KA41sub[id.na,'Flow'] <- pred[id.na] #Replace NA values in the time series by predicted values
+precip1KA41sub[precip1KA41sub$Flow<0.05 & !is.na(precip1KA41sub$Flow),'Flow'] <- 0 #For values < 0 and improbably low values, replace with 0
+ggplot(precip1KA41sub[,], aes(x=Date, y=Flow)) + geom_point() + #Plot result
+  geom_point(data=precip1KA41sub[id.na,], color='red')
+
+ggplot(precip1KA41sub[,], aes(x=Date, y=Flow, color=gap)) + geom_point() +
+  scale_colour_distiller(name='Gap (years)',palette='Spectral',breaks=seq(0,365.25,30),
+                         limits=c(min(precip1KA41sub$gap),max(precip1KA41sub$gap)))#Plot result
+
+impute_preds2 <- merge(impute_preds, precip1KA41sub[,c('Date','Flow')], by='Date', all.x=T)
+impute_preds2[impute_preds2$Date>mindate & impute_preds2$Date<maxdate,'1KA41'] <- impute_preds2[impute_preds2$Date>mindate & impute_preds2$Date<maxdate,'Flow']
+impute_preds2 <- impute_preds2[,-which(colnames(impute_preds2)=='Flow')]
+impute_preds2[impute_preds2$gap_1KA41>=37 & impute_preds2$gap_1KA41<274 & !is.na(impute_preds2$gap_1KA41), 'source_1KA41'] <- 'ARIMAX_interpolated'
 
 
 ##################################Gap plot################

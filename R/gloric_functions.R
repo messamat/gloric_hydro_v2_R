@@ -145,7 +145,7 @@ readformatGRDC<- function(path, newformat=T) {
       .[, -c('hh:mm'), with=F] %>%
       setorder(grdc_no, date)
   }
-
+  
   #Format data
   gaugetab[, `:=`(year = as.numeric(substr(date, 1, 4)), #Create year column
                   month = as.numeric(substr(date, 6, 7)), #create month column
@@ -164,7 +164,7 @@ readformatGRDC<- function(path, newformat=T) {
   
   gaugetab[(Qobs %in% c(-999, -99, -9999, 99, 999, 9999)),
            Qobs := NA]
-
+  
   return(gaugetab)
 }
 
@@ -236,9 +236,9 @@ flagGRDCoutliers <- function(in_gaugetab) {
     .[, `:=`(jdaymean = mean(logmean5d, na.rm = T),
              jdaysd = sd(logmean5d, na.rm = T)),
       by = jday] %>% #Compute mean and SD of 5-day mean of log(Q + 0.01) by Julian day
-    .[abs(log(Qobs + 0.01) - jdaymean) > (6 * jdaysd),
+    .[abs(log(Qobs + 0.01) - jdaymean) > (5 * jdaysd),
       flag_mathis := flag_mathis + 1]
-
+  
   return(in_gaugetab)
 }
 
@@ -529,7 +529,7 @@ format_riggs2023 <- function(in_dir) {
   
   q_bind[, `:=`(grdc_no =as.character(grdc_no),
                 date=as.character(date)
-                )]
+  )]
   
   return(q_bind)
 }
@@ -565,7 +565,7 @@ format_gauges_metadata <- function(
   gstats_merge_nodupli <- sort(gstats_merge, 'grdc_match') %>%
     .[!duplicated(grdc_no),] %>% #remove duplicates
     .[!is.na(d_yrs) & (d_yrs > min_yrs),]  #Remove those with insufficient daily data (anymore. used to)
-
+  
   #Compute pop density
   pop_cols <- grep('pop_[0-9]{4}', names(gstats_merge_nodupli), value=T)  
   gstats_merge_nodupli[
@@ -598,7 +598,7 @@ format_gauges_metadata <- function(
 plot_anthropo_stats <- function(in_gmeta_formatted) {
   #Degree of regulation plot ---------------------------------------------------
   dt_format_dor <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
-                                     fieldroot = 'dor') 
+                                       fieldroot = 'dor') 
   
   p_dor <- ggplot(dt_format_dor, aes(x=value, y=year, fill = n, 
                                      group=year, height = ..count..)) +
@@ -621,7 +621,7 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
   
   #Crop plot -----------------------------------------------------
   dt_format_crop <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
-                                      fieldroot = 'crop') %>%
+                                        fieldroot = 'crop') %>%
     .[!is.na(value),]
   
   p_crop <- ggplot(dt_format_crop, aes(x=value, y=year, fill = n, 
@@ -642,12 +642,12 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
       legend.position='none'
       , plot.margin=margin(1, 0.5, 0.1, 0.1, "cm")
     )
-
+  
   #Population density plot -----------------------------------------------------
   dt_format_pop <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
-                                     fieldroot = 'pop') %>%
+                                       fieldroot = 'pop') %>%
     .[!is.na(value),]
-
+  
   p_pop <- ggplot(dt_format_pop, aes(x=value, y=year, fill = n, 
                                      group=year, height = ..count..)) +
     geom_density_ridges(stat='density', scale=5, alpha=1/2,
@@ -668,14 +668,14 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
       legend.position = 'none'
       , plot.margin=margin(1, 0.5, 0.1, 0.1, "cm")
     )
-
+  
   #Built plot -----------------------------------------------------
   dt_format_built <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
-                                     fieldroot = 'built') %>%
+                                         fieldroot = 'built') %>%
     .[!is.na(value),]
-
+  
   p_built <- ggplot(dt_format_built, aes(x=value, y=year, fill = n, 
-                                     group=year, height = ..count..)) +
+                                         group=year, height = ..count..)) +
     geom_density_ridges(stat='density', scale=10, alpha=1/2,
                         rel_min_height = 0.001)  +
     scale_x_continuous(
@@ -692,7 +692,7 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
     theme_ridges() + 
     theme(plot.margin=margin(1, 0.5, 0.1, 0.1, "cm")
     )
-
+  
   p_patchwork <- (p_crop + p_dor+ plot_layout(axes='collect'))/
     (p_pop + p_built + plot_layout(axes='collect'))
   
@@ -718,7 +718,7 @@ filter_reference_gauges <- function(in_gmeta_formatted,
       .[, (fn) := nafill(get(fn), type='locf'), by=grdc_no] 
     return(dor_dat[, c('grdc_no', 'year',  fn), with=F])
   }
-
+  
   anthropo_interpolated <- lapply(
     c('dor', 'pop', 'built', 'crop'), 
     function(in_fieldroot) {
@@ -768,14 +768,15 @@ prepare_QC_data_util <- function(in_grdc_no,
                                  in_pdsi,
                                  in_rivice,
                                  in_riggs2023) {
-    #Pre-format anthropo data
-    gauges_anthropo <- in_ref_gauges$dt %>%
+  #Pre-format anthropo data
+  gauges_anthropo <- in_ref_gauges$dt %>%
     .[, grdc_no := as.character(grdc_no)]
-
+  
   #Get basic metadata and discharge observations
   filepath <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
   q_dt <- readformatGRDC(filepath)
   
+  med_q <- median(q_dt[missingdays<30, median(Qobs)])
   
   #Get discharge  data from upstream and downstream gauges
   netnear_gauges <- in_netdist[grdc_no ==in_grdc_no,]
@@ -821,6 +822,32 @@ prepare_QC_data_util <- function(in_grdc_no,
     merge(near_gaugesq, by='date', all.x=T) %>%
     .[, date := as.Date(date)]
   
+  #Sort near gauges based on overlap and similarity in median Q
+  nearg_cols <- grep('Qobs_(down|up)stream_travel_.*',
+                     names(in_data_forqc),
+                     value=T)
+  
+  #Check number of years where both the target ts has less than 30 missing days
+  # and number of years where the ref ts has less than 30 missing days
+  near_gcols_stats <- lapply(nearg_cols, function(gcol) {
+    common_yrs <- q_dt_attri[, .SD[(sum(is.na(get(gcol)))<30) &
+                                     (sum(is.na(Qobs))<30),], by=year]
+    ncommon_yrs <- common_yrs[, length(unique(year))]
+    cc_all <- common_yrs[, ccf(ts(log(get(gcol)+0.01)), ts(log(Qobs+0.01)), 
+                               na.action=na.pass,
+                               i = 10,
+                               plot=F)]
+    max_cc <- max(cc_all$acf)
+    
+    return(data.table(
+      col=gcol,
+      ncommon_yrs=ncommon_yrs,
+      max_cc=max_cc
+    ))
+  }) %>% rbindlist
+  
+  near_gcols_sel <- near_gcols_stats[ncommon_yrs>5,][order(-max_cc),col]
+  
   #Format a few columns
   q_dt_attri[date > as.Date('1958-01-01'), 
              `:=`(
@@ -831,7 +858,249 @@ prepare_QC_data_util <- function(in_grdc_no,
   #initial value flag
   flagGRDCoutliers(q_dt_attri)
   
-  return(q_dt_attri)
+  return(q_dt_attri=q_dt_attri,
+         near_gcols_sel = near_gcols_sel)
 }
 
 
+#------ train_outlier_model ----------------------------------------------------
+#Leigh et al. 2019 8-step approahc:
+#Step 1: define end-user needs ------------------------------------------------
+# Minimize bias in hydrologic metrics that would cause confusion in clustering 
+# through multivariate outliers, or wrong class assignation of a gauge
+# The priority is to deal with erroneous zero-flow values but other values matter too.
+# The goal would then be to clean erroneous values when possible or exclude 
+# the time series of a gauging station altogether if it is deemed too unreliable.
+#
+# A multi-level flagging system is possible: removing the most egregious outliers
+# and submitting the other outliers to visual examination.
+# However, there are many records from a large diversity of systems with limited
+# ancillary data. Therefore:
+# - Expert knowledge on the processes causing outliers is limited.
+# - The causes of outliers and the possible normal patterns are diverse
+# - There are millions of data points, so the outlier-detection model cannot be too computationally expensive
+# - For all those reasons, the modeling workflow must be mostly automatic
+# - Equally, manual corrections are possible should not be too extensive
+#
+#
+#Step 2: Identify data characteristics-----------------------------------------
+# The data are very diverse but: there are daily, long time series
+# with several thousand data points, moderately to strong annual seasonal patterns,
+# logarithmic variations with potentially large sudden peaks across multiple orders of magnitude,
+# missing data, and potential trends and change points.
+# Not all have no-flow values. There are many types of outliers.
+# But most series are heavily temporally autocorrelated. Ancillary variables do exists,
+# including gauges upstream and/or downstream.
+#
+#Step 3: Define anomalies and their types---------------------------------------
+# Here the objective is to identify anomalies - values which seem unnatural --
+# whose value reflects sensor errors, post-processing errors, or substantial human influences. 
+# (e.g. due to dam operation, water withdrawal, instrument failures, 
+# unit conversion, or post-processing errors, rating curve shifts)
+# Based on Leigh et al. 2019, Strohmenger et al. 2023, and our own observations,
+# we propose the following types of anomalies:
+# - linear interpolation: periods showing a straight line often due to a filling 
+#                        in of a period with missing data
+# - drops: sudden decrease in the measured streamflow that may be due to water management or technical failures of the instrument
+# - noise: periodic pattern in the streamflow time series (hydro-peaking, perturbation in measurements)
+# - point anomalies: short-term variations of the streamflow that may be related 
+#                    to the maintenance of the instrument or, for example, '
+#                    to the presence of debris in the river.
+# - Constant offset (calibration error)
+# - Sudden shifts followed by continuous change in range and mean
+# - Long-term drift
+# - Cropped range (e.g., large values are bound by an artificial maximum)
+# These are applicable to values in general but also specifically to zeros:
+#Sudden drop to zero. Sudden non-zero value during zero period.
+# Anomalous continuous periods of zero. Values never reaching zero, just above zero.
+# Values previously reaching zero and now never reaching zero, or vice versa 
+# Trend towards increasingly frequent and long no-flow periods.
+#
+#Step 4: Rank anomalies by importance -----------------------------------------
+# TBD
+#
+#Step 5: Select suitable methods of anomaly detection -------------------------
+# Will start with a dynamic regression model 
+# with log-transformation, fourier terms for annual seasonality.
+# Using two confidence intervals for manual and automatic deletion of data
+# (May include neural network approach or unsupervised approach as well TBD)
+# May apply the approach with multiple iterations (removing a first set of potential biasing points)
+# then re-run it
+#
+#Step 6: Select metrics to evaluate and compare methods ------------------------
+# RMSE, precision and sensitivity, balanced accuracy
+# Processing time
+#
+#Step 7: Prepare data for anomaly detection ------------------------------------
+# Done :)
+#
+#Step 8: Implement anomaly detection methods -----------------------------------
+
+#Analysis ----------------------------------------------------------------------
+
+
+function (x, iterate = 2, lambda = NULL)
+{
+  n <- length(x)
+  freq <- frequency(x)
+  missng <- is.na(x)
+  nmiss <- sum(missng)
+  if (nmiss > 0L) {
+    xx <- na.interp(x, lambda = lambda)
+  }
+  else {
+    xx <- x
+  }
+  if (is.constant(xx)) {
+    return(list(index = integer(0), replacements = numeric(0)))
+  }
+  if (!is.null(lambda)) {
+    xx <- BoxCox(xx, lambda = lambda)
+    lambda <- attr(xx, "lambda")
+  }
+  if (freq > 1 && n > 2 * freq) {
+    fit <- mstl(xx, robust = TRUE)
+    rem <- remainder(fit)
+    detrend <- xx - trendcycle(fit)
+    strength <- 1 - var(rem)/var(detrend)
+    if (strength >= 0.6) {
+      xx <- seasadj(fit)
+    }
+  }
+  tt <- 1:n
+  mod <- supsmu(tt, xx)
+  resid <- xx - mod$y
+  if (nmiss > 0L) {
+    resid[missng] <- NA
+  }
+  resid.q <- quantile(resid, probs = c(0.25, 0.75), na.rm = TRUE)
+  iqr <- diff(resid.q)
+  limits <- resid.q + 3 * iqr * c(-1, 1)
+  if ((limits[2] - limits[1]) > 1e-14) {
+    outliers <- which((resid < limits[1]) | (resid > limits[2]))
+  }
+  else {
+    outliers <- numeric(0)
+  }
+  x[outliers] <- NA
+  x <- na.interp(x, lambda = lambda)
+  if (iterate > 1) {
+    tmp <- tsoutliers(x, iterate = 1, lambda = lambda)
+    if (length(tmp$index) > 0) {
+      outliers <- sort(unique(c(outliers, tmp$index)))
+      x[outliers] <- NA
+      if (sum(!is.na(x)) == 1L) {
+        x[is.na(x)] <- x[!is.na(x)]
+      }
+      else x <- na.interp(x, lambda = lambda)
+    }
+  }
+  return(list(index = outliers, replacements = x[outliers]))
+}
+
+train_outlier_model <- function(in_data_forqc) {
+  in_data_forqc <- tar_read(data_for_qc)
+  
+  ts_cols <- c('date', 'Qobs', 'dor_interp', 'pop_interp', 'built_interp',
+               'crop_interp', 'tmax', 'PDSI', 'Qmod', 'river_ice_fraction'
+  )
+  nearg_cols <- grep('Qobs_(down|up)stream_travel_.*',
+                     names(in_data_forqc),
+                     value=T)
+  
+  #Make tsibble
+  q_ts <- in_data_forqc[, c(ts_cols, nearg_cols), with=F] %>%
+    .[Qobs < 0, Qobs := NA] %>%
+    as_tsibble(index='date') 
+  
+  obs_bclambda  <- BoxCox.lambda(q_ts[, 'Qobs']) #Determine BoxCox transformation lambda
+  nearg_bclambda <- 
+    q_form <- ts(q_ts[, 'Qobs'], frequency=365.25)
+  
+  
+  
+  
+  bestfit <- list(aicc=Inf)
+  for(i in 1:20) #Select the number of Fourier series by minimizing AIC
+  {
+    fit <- auto.arima(log(q_form+0.1), 
+                      seasonal=FALSE, 
+                      xreg=cbind(fourier(q_form, K=i),
+                                 log(q_ts$Qobs_upstream_travel_1634650+0.1)))
+    if(fit$aicc < bestfit$aicc){
+      print(i)
+      bestfit <- fit #Keep model with lowest AIC
+      besti <- i
+    }else {break};
+  }
+  
+  
+  
+  
+  autoplot(q_ts, log(Qobs+0.1))   #Standard ts plot
+  gg_season(q_ts, log(Qobs+0.1))  #Seasonal plot
+  GGally::ggpairs(as.data.table(q_ts),  #Correlation matrix
+                  columns=grep('Qobs.*', names(q_ts)))
+  ACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
+  ACF(q_ts, Qobs, lag_max=365*5) %>% autoplot() #correlogram for the past 5 years (trend)
+  PACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
+  PACF(q_ts, Qobs, lag_max=365) %>% autoplot() #correlogram for the past month
+  
+  
+  
+  
+  
+  
+  
+  sigma2 <- bestfit$sigma2
+  q_ts$fit <- fitted(bestfit)
+  
+  ggplot(q_ts, aes(x=date, y=Qobs, group=1)) +
+    geom_line(aes(y=exp(fit)), color='red') +
+    geom_line()
+  
+  
+  
+  bestfit %>%
+    fitted() %>%
+    mutate(
+      lo = .fitted - 1.96*sqrt(sigma2),
+      hi = .fitted + 1.96*sqrt(sigma2)
+    )
+  
+  q_fcast <- forecast(bestfit, xreg=fourier(q_form, K=5, h=730))
+  autoplot(q_fcast)
+  
+  
+  kr <- KalmanSmooth(q_form, bestfit$model) #Impute missing values with Kalman Smoother (from https://stats.stackexchange.com/questions/104565/how-to-use-auto-arima-to-impute-missing-values)
+  id.na <- which(is.na(q_form)) #Limit to gaps < 9 months
+  pred <- q_form
+  for (i in id.na)
+    pred[i] <- bestfit$model$Z %*% kr$smooth[i,]
+  q_ts[id.na,'Qinterp'] <- pred[id.na] #Replace NA values in the time series by predicted values
+  #precip1KA41sub[precip1KA41sub$Flow<0.05 & !is.na(precip1KA41sub$Flow),'Flow'] <- 0 #For values < 0 and improbably low values, replace with 0
+  ggplot(q_ts, aes(x=date, y=Qobs)) + geom_point() + #Plot result
+    geom_point(data=q_ts[id.na,], aes(y=Qinterp), color='red')
+  
+  
+  #################
+  q_mod1 <- q_ts |>
+    model(ARIMA(log(Qobs) ~ fourier(K=5) + PDQ(0,0,0) + season(period = 365.25)))
+  q_fit <- bestfit |>
+    forecast(h = 365) |>
+    autoplot(q_ts, level = 95)
+  q_fit
+  
+  # check <- tslm(ts(q_ts$Qobs, frequency=365.25) ~ trend + season, lambda='auto') 
+  # plot(forecast(check, h=365.25))
+  #check<- features(q_ts,Qobs, feature_set(pkgs = "feasts")) #Get all features from feasts
+  #check <- tsoutliers(ts(log(q_ts$Qobs+0.01), 365.25)) #look for outliers
+  
+  #Remove negative values
+  #
+  
+  
+  
+  
+  
+}

@@ -750,6 +750,7 @@ filter_reference_gauges <- function(in_gmeta_formatted,
   )
 }
 #------ prepare_QC_data --------------------------------------------------------
+# in_grdc_no=3651650
 # in_ref_gauges = tar_read(ref_gauges)
 # in_gmeta_formatted = tar_read(gmeta_formatted)
 # in_geodist = tar_read(geodist)
@@ -789,15 +790,6 @@ prepare_QC_data_util <- function(in_grdc_no,
     return(q_up)
   }
   
-  near_gaugesq <- netnear_gauges[
-    , get_nearg_qobs(in_grdc_no=grdc_no_destination, 
-                     in_direction=dist_net_dir)
-    , by=c('grdc_no_destination', 'dist_net_dir')]%>%
-    .[, colname := paste0('Qobs_', dist_net_dir, '_', grdc_no_destination)] %>%
-    dcast(date~colname,
-          value.var='Qobs'
-    )
-  
   #Merge all data
   q_dt_attri <- merge(q_dt, #merge anthropo data
                       gauges_anthropo[, -c('n_years'), with=F],
@@ -818,39 +810,54 @@ prepare_QC_data_util <- function(in_grdc_no,
     merge(in_rivice[grdc_no == in_grdc_no, -'mean_elv',with=F],
           by=c('grdc_no', 'date'),
           all.x=T
-    ) %>%
-    merge(near_gaugesq, by='date', all.x=T) %>%
+    )
+  
+  
+  if (nrow(netnear_gauges)>0) {
+    near_gaugesq <- netnear_gauges[
+      , get_nearg_qobs(in_grdc_no=grdc_no_destination, 
+                       in_direction=dist_net_dir)
+      , by=c('grdc_no_destination', 'dist_net_dir')]%>%
+      .[, colname := paste0('Qobs_', dist_net_dir, '_', grdc_no_destination)] %>%
+      dcast(date~colname,
+            value.var='Qobs'
+      )
+    q_dt_attri <-  q_dt_attri %>% 
+      merge(near_gaugesq, by='date', all.x=T) %>%
     .[, date := as.Date(date)]
-  
-  #Sort near gauges based on overlap and similarity in median Q
-  nearg_cols <- grep('Qobs_(down|up)stream_travel_.*',
-                     names(q_dt_attri),
-                     value=T)
-  
-  #Check number of years where both the target ts has less than 30 missing days
-  # and number of years where the ref ts has less than 30 missing days
-  near_gcols_stats <- lapply(nearg_cols, function(gcol) {
-    ntotal_yrs <-  q_dt_attri[, .SD[(sum(is.na(Qobs))<30),], by=year] %>%
-      .[, length(unique(year))]
-    common_yrs <- q_dt_attri[, .SD[(sum(is.na(get(gcol)))<30) &
-                                     (sum(is.na(Qobs))<30),], by=year]
-    ncommon_yrs <- common_yrs[, length(unique(year))]
-    cc_all <- common_yrs[, ccf(ts(log(get(gcol)+0.01)), ts(log(Qobs+0.01)), 
-                               na.action=na.pass,
-                               i = 10,
-                               plot=F)]
-    max_cc <- max(cc_all$acf)
     
-    return(data.table(
-      col=gcol,
-      ncommon_yrs=ncommon_yrs,
-      ncommon_ratio=ncommon_yrs/ntotal_yrs,
-      max_cc=max_cc
-    ))
-  }) %>% rbindlist
-  
-  near_gcols_sel <- near_gcols_stats[ncommon_yrs>5 & ncommon_ratio>0.75,] %>%
-    .[order(-max_cc),col]
+    #Sort near gauges based on overlap and similarity in median Q
+    nearg_cols <- grep('Qobs_(down|up)stream_travel_.*',
+                       names(q_dt_attri),
+                       value=T)
+    
+    #Check number of years where both the target ts has less than 30 missing days
+    # and number of years where the ref ts has less than 30 missing days
+    near_gcols_stats <- lapply(nearg_cols, function(gcol) {
+      ntotal_yrs <-  q_dt_attri[, .SD[(sum(is.na(Qobs))<30),], by=year] %>%
+        .[, length(unique(year))]
+      common_yrs <- q_dt_attri[, .SD[(sum(is.na(get(gcol)))<30) &
+                                       (sum(is.na(Qobs))<30),], by=year]
+      ncommon_yrs <- common_yrs[, length(unique(year))]
+      cc_all <- common_yrs[, ccf(ts(log(get(gcol)+0.01)), ts(log(Qobs+0.01)), 
+                                 na.action=na.pass,
+                                 i = 10,
+                                 plot=F)]
+      max_cc <- max(cc_all$acf)
+      
+      return(data.table(
+        col=gcol,
+        ncommon_yrs=ncommon_yrs,
+        ncommon_ratio=ncommon_yrs/ntotal_yrs,
+        max_cc=max_cc
+      ))
+    }) %>% rbindlist
+    
+    near_gcols_sel <- near_gcols_stats[ncommon_yrs>5 & ncommon_ratio>0.75,] %>%
+      .[order(-max_cc),col]
+  } else {
+    near_gcols_sel <- NULL
+  }
   
   #Format a few columns
   q_dt_attri[date > as.Date('1958-01-01'), 
@@ -870,95 +877,20 @@ prepare_QC_data_util <- function(in_grdc_no,
 
 
 #------ train_outlier_model ----------------------------------------------------
-#Leigh et al. 2019 8-step approahc:
-#Step 1: define end-user needs ------------------------------------------------
-# Minimize bias in hydrologic metrics that would cause confusion in clustering 
-# through multivariate outliers, or wrong class assignation of a gauge
-# The priority is to deal with erroneous zero-flow values but other values matter too.
-# The goal would then be to clean erroneous values when possible or exclude 
-# the time series of a gauging station altogether if it is deemed too unreliable.
-#
-# A multi-level flagging system is possible: removing the most egregious outliers
-# and submitting the other outliers to visual examination.
-# However, there are many records from a large diversity of systems with limited
-# ancillary data. Therefore:
-# - Expert knowledge on the processes causing outliers is limited.
-# - The causes of outliers and the possible normal patterns are diverse
-# - There are millions of data points, so the outlier-detection model cannot be too computationally expensive
-# - For all those reasons, the modeling workflow must be mostly automatic
-# - Equally, manual corrections are possible should not be too extensive
-#
-#
-#Step 2: Identify data characteristics-----------------------------------------
-# The data are very diverse but: there are daily, long time series
-# with several thousand data points, moderately to strong annual seasonal patterns,
-# logarithmic variations with potentially large sudden peaks across multiple orders of magnitude,
-# missing data, and potential trends and change points.
-# Not all have no-flow values. There are many types of outliers.
-# But most series are heavily temporally autocorrelated. Ancillary variables do exists,
-# including gauges upstream and/or downstream.
-#
-#Step 3: Define anomalies and their types---------------------------------------
-# Here the objective is to identify anomalies - values which seem unnatural --
-# whose value reflects sensor errors, post-processing errors, or substantial human influences. 
-# (e.g. due to dam operation, water withdrawal, instrument failures, 
-# unit conversion, or post-processing errors, rating curve shifts)
-# Based on Leigh et al. 2019, Strohmenger et al. 2023, and our own observations,
-# we propose the following types of anomalies:
-# - linear interpolation: periods showing a straight line often due to a filling 
-#                        in of a period with missing data
-# - drops: sudden decrease in the measured streamflow that may be due to water management or technical failures of the instrument
-# - noise: periodic pattern in the streamflow time series (hydro-peaking, perturbation in measurements)
-# - point anomalies: short-term variations of the streamflow that may be related 
-#                    to the maintenance of the instrument or, for example, '
-#                    to the presence of debris in the river.
-# - Constant offset (calibration error)
-# - Sudden shifts followed by continuous change in range and mean
-# - Long-term drift
-# - Cropped range (e.g., large values are bound by an artificial maximum)
-# These are applicable to values in general but also specifically to zeros:
-#Sudden drop to zero. Sudden non-zero value during zero period.
-# Anomalous continuous periods of zero. Values never reaching zero, just above zero.
-# Values previously reaching zero and now never reaching zero, or vice versa 
-# Trend towards increasingly frequent and long no-flow periods.
-#
-#Step 4: Rank anomalies by importance -----------------------------------------
-# TBD
-#
-#Step 5: Select suitable methods of anomaly detection -------------------------
-# Will start with a dynamic regression model 
-# with log-transformation, fourier terms for annual seasonality.
-# Using two confidence intervals for manual and automatic deletion of data
-# (May include neural network approach or unsupervised approach as well TBD)
-# May apply the approach with multiple iterations (removing a first set of potential biasing points)
-# then re-run it
-#
-#Step 6: Select metrics to evaluate and compare methods ------------------------
-# RMSE, precision and sensitivity, balanced accuracy
-# Processing time
-#
-#Step 7: Prepare data for anomaly detection ------------------------------------
-# Done :)
-#
-#Step 8: Implement anomaly detection methods -----------------------------------
+#in_data<- tar_read(data_for_qc)
 
-#Analysis ----------------------------------------------------------------------
-detect_outliers_ts <- function(in_data_forqc) {
-  in_dt <- in_data_forqc$q_dt_attri
+detect_outliers_ts <- function(in_data) {
+  in_dt <- in_data$q_dt_attri
   
-  nearg_cols <- in_data_forqc$near_gcols_sel
-  ts_cols <- c('date', 'Qobs', 'dor_interp', 'pop_interp', 'built_interp',
-               'crop_interp', 'tmax', 'PDSI', 'Qmod', 'river_ice_fraction'
-  )
-  
-  
-  #Make tsibble
+  #Subset columns and remove negative values
+  nearg_cols <- in_data$near_gcols_sel
+  ts_cols <- c('date', 'Qobs', 'jday', 'year', 'PDSI')
   q_dt <- in_dt[, c(ts_cols, nearg_cols), with=F] %>%
     .[Qobs < 0, Qobs := NA] 
   
+  #Transform discharge and create time series object
   obs_bclambda  <- BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
   q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
-  
   q_ts <- ts(q_dt$Qobs_trans, frequency=365.25)
   
   #Identify outliers with ARIMAX -----------------------------------------------
@@ -1076,10 +1008,7 @@ detect_outliers_ts <- function(in_data_forqc) {
   setnames(q_dt, 'flag_mathis', 'auto_flag')
   
   #Detect anormally smooth stretches -------------------------------------------
-  q_dt[,`:=`(jday = as.numeric(format(q_dt$date, '%j')),
-             year = as.numeric(format(q_dt$date, '%Y')),
-             date = as.Date(date)
-  )]
+  q_dt[,`:=`(date = as.Date(date))]
   
   #Identify periods of at least 7 days whose CV in second order difference
   # is below the 10th percentile for their respective calendar day
@@ -1115,10 +1044,13 @@ detect_outliers_ts <- function(in_data_forqc) {
     .[!duplicated(trimester),] %>%
     .[, end_date := .SD[.I+1, trimester]-1]
   
+  p_ymin <- q_dt[, min(c(min(Qobs,na.rm=T), 
+                       min(fit_l99, na.rm=T)))]
+  
   p_fit <- ggplot(data=q_dt) +
     geom_rect(data=p_rect_dat,
               aes(xmin=trimester, xmax=end_date, 
-                  ymin=0, ymax=Inf, 
+                  ymin=p_ymin, ymax=Inf, 
                   fill = PDSI), alpha=1/2) +
     geom_ribbon(aes(x=date, ymin=fit_l99, ymax=fit_u99), color='darkgrey') + 
     geom_line(aes(x=date, y=Qobs), size=1) +
@@ -1131,7 +1063,8 @@ detect_outliers_ts <- function(in_data_forqc) {
   q_dt[, grp_int := interaction(format(date, '%Y%m'), 
                                 as.numeric(factor(PDSI, exclude = 999)))]
   
-  p_fit_seasonal <-  ggplot(q_dt[!is.na(Qobs)], aes(x=jday, y=Qobs)) + 
+  p_fit_seasonal <-  ggplot(q_dt[!is.na(Qobs)], 
+                            aes(x=as.numeric(jday), y=Qobs)) + 
     # geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, 
     #                 fill=PDSI, group=grp_int), 
     #             alpha=1/5) + 
@@ -1148,8 +1081,9 @@ detect_outliers_ts <- function(in_data_forqc) {
   
   p_fit_forplotly <- ggplot(data=q_dt) +
     geom_line(aes(x=date, y=Qobs), size=1.2) +
-    geom_line(aes(x=date, y=fit),  color='orange') +
+    #geom_line(aes(x=date, y=fit),  color='orange') +
     geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
+    scale_x_date(date_breaks="1 year") +
     scale_y_sqrt() + 
     theme_classic()
   

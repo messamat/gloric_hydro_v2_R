@@ -176,7 +176,7 @@ list(
 
   tar_target(
     q_outliers_flags,
-    detect_outliers_ts(in_data_forqc=data_for_qc)
+    detect_outliers_ts(in_data=data_for_qc)
   )
   
   #Fill small gaps

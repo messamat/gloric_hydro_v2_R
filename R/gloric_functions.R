@@ -955,10 +955,11 @@ detect_outliers_ts <- function(in_data_forqc) {
   obs_bclambda  <- BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
   nearg_bclambda <- BoxCox.lambda(ts(q_dt[, nearg_cols, with=F], frequency=365.25))
 
-  q_dt[, q_bc := BoxCox(Qobs, lambda=obs_bclambda)]
+  q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
   
-  q_ts <- ts(q_dt$q_bc, frequency=365.25)
+  q_ts <- ts(q_dt$Qobs_trans, frequency=365.25)
   
+  #Identify outliers with ARIMAX -----------------------------------------------
   #If there is a nearby gauge
   test_without_nearg <- T # by default, set this to FALSE to not throw an error if there is no nearby gauge
   if (length(nearg_cols) >= 1) {
@@ -968,7 +969,7 @@ detect_outliers_ts <- function(in_data_forqc) {
       ts(frequency=365.25)
     
     #Determine lag time with highest cross-correlation between the two gauges
-    maxccf_lag_nearg <- ccf(q_ts[,1], q_near[,1], 
+      maxccf_lag_nearg <- ccf(q_ts, q_near, 
                             na.action=na.pass, plot=F)$acf %>%
       as.data.table %>%
       .[, shift := seq_along(.I)-median(.I)] %>%
@@ -1043,63 +1044,49 @@ detect_outliers_ts <- function(in_data_forqc) {
   q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
   q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
   q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)
-  
-  
-  #Detect outliers through periodic STL decomposition
+
+  #Detect outliers through periodic STL decomposition --------------------------
   stl_outliers <- tsoutliers(q_ts, iterate = 2)
   
-  #Detect potential outliers through hard rules
+  #Detect potential outliers through hard rules --------------------------------
   flagGRDCoutliers(q_dt)
   setnames(q_dt, 'flag_mathis', 'auto_flag')
   
-  #Detect anormally smooth stretches
-  q_dt[, Qobs_diff2 := c(NA, NA, diff(Qobs, differences=2))] %>%
-    .[, Qdiff2_rollcv := frollapply(Qobs_diff2, n=10, sd)/frollmean(Qobs_diff2, n=10)]
-  
-  
-  ggplotly(ggplot(q_dt, aes(x=date, y=Qobs_diff2)) +
-    geom_line() )
-    
-  
-  
-  autoplot(diff(diff(q_ts))) %>%
-    ggplotly()
-  
-  mstl_remainder_diff <- mstl(diff(diff(q_ts)), robust=TRUE)
-  
-  mstl(diff(diff(q_ts)), robust=TRUE) %>%
-    autoplot
-  
-  # %>%
-  #   as.data.table %>%
-  #   .[, i := .I] %>%
-  #   .[, remainder_diff := Remainder - data.table::shift(Remainder)] %>%
-  #   .[, remainder_diff2 := remainder_diff - data.table::shift(remainder_diff)]
-  # ggplotly(ggplot(mstl_remainder_diff, aes(x=i, y=remainder_diff2)) +
-  #   geom_line())
-  # 
-  
-  #Mark potential outliers
-  q_dt[stl_outliers$index, stl_outlier := 1]
-  q_dt[, `:=`(
-    arima_outlier95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
-    arima_outlier99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
-  )]
-  
-  #Plot predictions  
+  #Detect anormally smooth stretches -------------------------------------------
   q_dt[,`:=`(jday = as.numeric(format(q_dt$date, '%j')),
              year = as.numeric(format(q_dt$date, '%Y')),
              date = as.Date(date)
   )]
   
+  #Identify periods of at least 7 days whose CV in second order difference
+  # is below the 10th percentile for their respective calendar day
+  q_dt[, Qobs_diff2 := c(NA, NA, diff(Qobs_trans, differences=2))] %>%
+    .[, Qdiff2_rollcv := frollapply(Qobs_diff2, n=10, sd)/abs(frollmean(Qobs_diff2, n=10))] 
+  q_dt[, Qdiff2_rollcv_jdayq90 := quantile(Qdiff2_rollcv, 1/10, na.rm=T), by=jday]
+  q_dt[, smooth_flag := (.N>7)&(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90), 
+       by=rleid(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90)]
+  
+  # ggplotly(ggplot(q_dt, aes(x=date, y=Qobs_trans)) +
+  #   geom_line() +
+  #   geom_point(data=q_dt[smooth_flag,], 
+  #              aes(color= smooth_flag))
+  # )
+  
+  #Mark potential outliers -----------------------------------------------------
+  q_dt[stl_outliers$index, stl_outlier := 1]
+  q_dt[, `:=`(
+    arima_outlier95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
+    arima_outlier99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
+  )]
+
   #Format outliers
   all_flags <- melt(
-    q_dt[(stl_outlier==1)|(arima_outlier99==1)|(auto_flag>0),],
+    q_dt[(stl_outlier==1)|(arima_outlier99==1)|(auto_flag>0)|smooth_flag,],
        id.vars=c('date', 'jday','year', 'Qobs'),
-       measure.vars = c('stl_outlier', 'arima_outlier99', 'auto_flag'))  %>%
+       measure.vars = c('stl_outlier', 'arima_outlier99', 'auto_flag', 'smooth_flag'))  %>%
     .[!(value %in% c(NA, 0)),]
   
-  
+  #Plot outliers ---------------------------------------------------------------
   p_rect_dat <- q_dt[!is.na(PDSI), .(date, PDSI)] %>%
     .[, trimester := lubridate::round_date(date, unit='3 months')] %>%
     .[!duplicated(trimester),] %>%
@@ -1111,90 +1098,84 @@ detect_outliers_ts <- function(in_data_forqc) {
                   ymin=0, ymax=Inf, 
                   fill = PDSI), alpha=1/2) +
     geom_ribbon(aes(x=date, ymin=fit_l99, ymax=fit_u99), color='darkgrey') + 
-    geom_line(aes(x=date, y=Qobs)) +
-    geom_line(aes(x=date, y=fit),  color='blue') +
+    geom_line(aes(x=date, y=Qobs), size=1) +
+    #geom_line(aes(x=date, y=fit),  color='orange') +
     geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
     scale_fill_distiller(name='PDSI', palette='RdBu', direction=1) +
     scale_y_sqrt() + 
     theme_classic()
 
-  q_dt[, grp_int := interaction(year, 
+  q_dt[, grp_int := interaction(format(date, '%Y%m'), 
                                 as.numeric(factor(PDSI, exclude = 999)))]
+  
   p_fit_seasonal <-  ggplot(q_dt[!is.na(Qobs)], aes(x=jday, y=Qobs)) + 
-    geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, 
-                    fill=PDSI, group=grp_int), 
-                alpha=1/5) + 
+    # geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, 
+    #                 fill=PDSI, group=grp_int), 
+    #             alpha=1/5) + 
     #geom_point(aes(color=year), alpha=1/4) +
-    geom_line(aes(color=PDSI, group=grp_int)) +
-    geom_line(aes(x=jday, y=get(nearg_cols[[1]]), group=year), color='blue') +
+    geom_line(aes(color=PDSI, group=grp_int), size=1) +
+    #geom_line(aes(x=jday, y=get(nearg_cols[[1]]), group=year), color='blue') +
     scale_color_distiller(palette='Spectral', direction=1) +
     scale_fill_distiller(palette='Spectral', direction=1) +
     ggnewscale::new_scale_color() +
-    geom_point(data=all_flags, aes(color=variable), alpha=1/2) +
+    geom_point(data=all_flags, aes(color=variable), alpha=1/2, size=2) +
+    scale_color_brewer(palette='Dark2') +
     scale_y_sqrt() +
     theme_classic()
   
-  ggplotly(ggplot(data=q_dt) +
-             #geom_ribbon(aes(x=date, ymin=fit_l99, ymax=fit_u99)) + 
-             geom_line(aes(x=date, y=Qobs)) +
-             geom_line(aes(x=date, y=fit),  color='blue') +
-             geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable))+
-             scale_y_sqrt() + 
-             theme_classic())
-  
-  # ggplot(q_dt, aes(x=jday, y=Qobs, group=year)) + 
-  #   geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, fill=year), alpha=1/5) + 
-  #   #geom_point(aes(color=year), alpha=1/4) +
-  #   geom_line(aes(color=year)) +
-  #   scale_color_distiller(palette='Spectral') +
-  #   scale_fill_distiller(palette='Spectral') +
-  #   ggnewscale::new_scale_color() +
-  #   geom_point(data=all_flags, aes(color=variable), alpha=1/2) +
-  #   scale_y_sqrt() +
-  #   theme_classic()
-  
-  
+  p_fit_forplotly <- ggplot(data=q_dt) +
+    geom_line(aes(x=date, y=Qobs), size=1.2) +
+    geom_line(aes(x=date, y=fit),  color='orange') +
+    geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
+    scale_y_sqrt() + 
+    theme_classic()
 
   
-  # kr <- KalmanSmooth(q_ts, bestfit$model) #Impute missing values with Kalman Smoother (from https://stats.stackexchange.com/questions/104565/how-to-use-auto-arima-to-impute-missing-values)
-  # id.na <- which(is.na(q_ts)) #Limit to gaps < 9 months
-  # pred <- q_ts
-  # for (i in id.na)
-  #   pred[i] <- bestfit$model$Z %*% kr$smooth[i,]
-  # q_dt[id.na,'Qinterp'] <- pred[id.na] #Replace NA values in the time series by predicted values
-  # #precip1KA41sub[precip1KA41sub$Flow<0.05 & !is.na(precip1KA41sub$Flow),'Flow'] <- 0 #For values < 0 and improbably low values, replace with 0
-  # ggplot(q_dt, aes(x=date, y=Qobs)) + geom_point() + #Plot result
-  #   geom_point(data=q_dt[id.na,], aes(y=Qinterp), color='red')
-
-  
-  #Extra fable/forecast functions
-  # autoplot(q_ts, log(Qobs+0.1))   #Standard ts plot
-  # gg_season(q_ts, log(Qobs+0.1))  #Seasonal plot
-  # GGally::ggpairs(as.data.table(q_ts),  #Correlation matrix
-  #                 columns=grep('Qobs.*', names(q_ts)))
-  # ACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
-  # ACF(q_ts, Qobs, lag_max=365*5) %>% autoplot() #correlogram for the past 5 years (trend)
-  # PACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
-  # PACF(q_ts, Qobs, lag_max=365) %>% autoplot() #correlogram for the past month
-  
-  # check <- tslm(ts(q_ts$Qobs, frequency=365.25) ~ trend + season, lambda='auto') 
-  # plot(forecast(check, h=365.25))
-  #check<- features(q_ts,Qobs, feature_set(pkgs = "feasts")) #Get all features from feasts
-  #check <- tsoutliers(ts(log(q_ts$Qobs+0.01), 365.25)) #look for outliers
-  
-  #Remove negative values
-  #
   return(list(
-   outliers_dt = q_ts[(stl_outlier==1)|(arima_outlier95==1)
-                      |(arima_outlier99==1)|(auto_flag>0),
-                      .(date, q_rleid, auto_flag, stl_outlier,
+   outliers_dt = q_dt[(stl_outlier==1)|(arima_outlier95==1)
+                      |(arima_outlier99==1)|(auto_flag>0)|(smooth_flag),
+                      .(date, q_rleid, auto_flag, stl_outlier,smooth_flag,
                           arima_outlier95, arima_outlier99)], 
    p_fit = p_fit,
-   p_seasonal = p_fit_seasonal
+   p_seasonal = p_fit_seasonal,
+   p_fit_forplotly = p_fit_forplotly
   ))
 }
 
-tar_load(q_outliers_flags)
-q_outliers_flags$outliers_dt
-q_outliers_flags$p_fit
-q_outliers_flags$p_seasonal
+# ggplot(q_dt, aes(x=jday, y=Qobs, group=year)) + 
+#   geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, fill=year), alpha=1/5) + 
+#   #geom_point(aes(color=year), alpha=1/4) +
+#   geom_line(aes(color=year)) +
+#   scale_color_distiller(palette='Spectral') +
+#   scale_fill_distiller(palette='Spectral') +
+#   ggnewscale::new_scale_color() +
+#   geom_point(data=all_flags, aes(color=variable), alpha=1/2) +
+#   scale_y_sqrt() +
+#   theme_classic()
+
+# kr <- KalmanSmooth(q_ts, bestfit$model) #Impute missing values with Kalman Smoother (from https://stats.stackexchange.com/questions/104565/how-to-use-auto-arima-to-impute-missing-values)
+# id.na <- which(is.na(q_ts)) #Limit to gaps < 9 months
+# pred <- q_ts
+# for (i in id.na)
+#   pred[i] <- bestfit$model$Z %*% kr$smooth[i,]
+# q_dt[id.na,'Qinterp'] <- pred[id.na] #Replace NA values in the time series by predicted values
+# #precip1KA41sub[precip1KA41sub$Flow<0.05 & !is.na(precip1KA41sub$Flow),'Flow'] <- 0 #For values < 0 and improbably low values, replace with 0
+# ggplot(q_dt, aes(x=date, y=Qobs)) + geom_point() + #Plot result
+#   geom_point(data=q_dt[id.na,], aes(y=Qinterp), color='red')
+
+
+#Extra fable/forecast functions
+# autoplot(q_ts, log(Qobs+0.1))   #Standard ts plot
+# gg_season(q_ts, log(Qobs+0.1))  #Seasonal plot
+# GGally::ggpairs(as.data.table(q_ts),  #Correlation matrix
+#                 columns=grep('Qobs.*', names(q_ts)))
+# ACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
+# ACF(q_ts, Qobs, lag_max=365*5) %>% autoplot() #correlogram for the past 5 years (trend)
+# PACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
+# PACF(q_ts, Qobs, lag_max=365) %>% autoplot() #correlogram for the past month
+
+# check <- tslm(ts(q_ts$Qobs, frequency=365.25) ~ trend + season, lambda='auto') 
+# plot(forecast(check, h=365.25))
+#check<- features(q_ts,Qobs, feature_set(pkgs = "feasts")) #Get all features from feasts
+#check <- tsoutliers(ts(log(q_ts$Qobs+0.01), 365.25)) #look for outliers
+

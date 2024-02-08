@@ -154,7 +154,7 @@ list(
   )
   ,
   tar_target(data_for_qc,
-             prepare_QC_data_util(in_grdc_no=1634700,
+             prepare_QC_data_util(in_grdc_no=1134030,
                                   in_ref_gauges=ref_gauges,
                                   in_gmeta_formatted=gmeta_formatted,
                                   #in_geodist,
@@ -167,15 +167,17 @@ list(
   ,
   
   tar_target(outlier_plot,
-             plotGRDCtimeseries(GRDCgaugestats_record=data_for_qc,
+             plotGRDCtimeseries(GRDCgaugestats_record=data_for_qc$q_dt_attri,
                                 outpath=NULL, 
                                 maxgap = 366,  
                                 showmissing = T)
              )
-  #,
+  ,
   
-  #Remove outliers
-  #tar_target()
+  tar_target(
+    q_outliers_flags,
+    detect_outliers_ts(in_data_forqc=data_for_qc)
+  )
   
   #Fill small gaps
 )

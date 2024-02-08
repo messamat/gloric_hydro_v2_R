@@ -830,6 +830,8 @@ prepare_QC_data_util <- function(in_grdc_no,
   #Check number of years where both the target ts has less than 30 missing days
   # and number of years where the ref ts has less than 30 missing days
   near_gcols_stats <- lapply(nearg_cols, function(gcol) {
+    ntotal_yrs <-  q_dt_attri[, .SD[(sum(is.na(Qobs))<30),], by=year] %>%
+      .[, length(unique(year))]
     common_yrs <- q_dt_attri[, .SD[(sum(is.na(get(gcol)))<30) &
                                      (sum(is.na(Qobs))<30),], by=year]
     ncommon_yrs <- common_yrs[, length(unique(year))]
@@ -842,11 +844,13 @@ prepare_QC_data_util <- function(in_grdc_no,
     return(data.table(
       col=gcol,
       ncommon_yrs=ncommon_yrs,
+      ncommon_ratio=ncommon_yrs/ntotal_yrs,
       max_cc=max_cc
     ))
   }) %>% rbindlist
   
-  near_gcols_sel <- near_gcols_stats[ncommon_yrs>5,][order(-max_cc),col]
+  near_gcols_sel <- near_gcols_stats[ncommon_yrs>5 & ncommon_ratio>0.75,] %>%
+    .[order(-max_cc),col]
   
   #Format a few columns
   q_dt_attri[date > as.Date('1958-01-01'), 
@@ -946,15 +950,13 @@ detect_outliers_ts <- function(in_data_forqc) {
   ts_cols <- c('date', 'Qobs', 'dor_interp', 'pop_interp', 'built_interp',
                'crop_interp', 'tmax', 'PDSI', 'Qmod', 'river_ice_fraction'
   )
-
+  
   
   #Make tsibble
   q_dt <- in_dt[, c(ts_cols, nearg_cols), with=F] %>%
     .[Qobs < 0, Qobs := NA] 
-
+  
   obs_bclambda  <- BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
-  nearg_bclambda <- BoxCox.lambda(ts(q_dt[, nearg_cols, with=F], frequency=365.25))
-
   q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
   
   q_ts <- ts(q_dt$Qobs_trans, frequency=365.25)
@@ -963,13 +965,16 @@ detect_outliers_ts <- function(in_data_forqc) {
   #If there is a nearby gauge
   test_without_nearg <- T # by default, set this to FALSE to not throw an error if there is no nearby gauge
   if (length(nearg_cols) >= 1) {
+    nearg_bclambda <- BoxCox.lambda(ts(q_dt[, nearg_cols, with=F], 
+                                       frequency=365.25))
+    
     #Get ts object of transformed data for nearby gauge
     q_near <- q_dt[, get(nearg_cols)] %>%
       BoxCox(lambda=nearg_bclambda) %>%
       ts(frequency=365.25)
     
     #Determine lag time with highest cross-correlation between the two gauges
-      maxccf_lag_nearg <- ccf(q_ts, q_near, 
+    maxccf_lag_nearg <- ccf(q_ts, q_near, 
                             na.action=na.pass, plot=F)$acf %>%
       as.data.table %>%
       .[, shift := seq_along(.I)-median(.I)] %>%
@@ -977,18 +982,27 @@ detect_outliers_ts <- function(in_data_forqc) {
     
     #Find best ARIMA model
     bestfit_nearg <- list(aicc=Inf)
-    for(i in 1:20) #Select the number of Fourier series by minimizing AIC
+    break_loop <- F
+    for(i in 1:6) #Select the number of Fourier series by minimizing AIC
     {
-      fit <- auto.arima(q_ts, 
-                        seasonal=FALSE, 
-                        xreg=cbind(fourier(q_ts, K=i),
-                                   lag(q_near, maxccf_lag_nearg)
-                        )
+      tryCatch(
+        fit <- auto.arima(q_ts, 
+                          seasonal=FALSE, 
+                          xreg=cbind(fourier(q_ts, K=i),
+                                     lag(q_near, maxccf_lag_nearg)
+                          )
+        ),
+        error = function(e) { #If no suitable ARIMA model
+          break_loop <- T
+        }
       )
-      if(fit$aicc < bestfit_nearg$aicc){
+      if (break_loop==T) {
+        break
+      }
+      if(fit$aicc < bestfit_nearg$aicc) {
         print(i)
         bestfit_nearg <- fit #Keep model with lowest AIC
-      }else {break};
+      } else {break}
     }
     
     #Test whether the residuals are stationary and uncorrelated
@@ -1001,13 +1015,22 @@ detect_outliers_ts <- function(in_data_forqc) {
   if ((length(nearg_cols)==0) | (test_without_nearg)) {
     #Find best ARIMA model (without other gauge)
     bestfit_nonearg <- list(aicc=Inf)
-    for(i in 1:20) #Select the number of Fourier series by minimizing AIC
+    break_loop <- F
+    for(i in 1:6) #Select the number of Fourier series by minimizing AIC
     {
-      fit <- auto.arima(q_ts, 
-                        seasonal=FALSE, 
-                        xreg=cbind(fourier(q_ts, K=i)
-                        )
+      tryCatch(
+        fit <- auto.arima(q_ts, 
+                          seasonal=FALSE, 
+                          xreg=cbind(fourier(q_ts, K=i)
+                          )
+        ),
+        error = function(e) { #If no suitable ARIMA model
+          break_loop <- T
+        }
       )
+      if (break_loop==T) {
+        break
+      }
       if(fit$aicc < bestfit_nonearg$aicc){
         print(i)
         bestfit_nonearg <- fit #Keep model with lowest AIC
@@ -1028,13 +1051,13 @@ detect_outliers_ts <- function(in_data_forqc) {
       } else { #Otherwise, pick the model with the lowest AICc
         bestfit <- list(bestfit_nearg, bestfit_nonearg) %>%
           .[which.min(lapply(., function(x) x$aicc))] %>%
-        .[[1]]
+          .[[1]]
       }
     } else {
-      bestfit <- restests_noneearg
+      bestfit <- bestfit_nonearg
     }
   }
-  restest <- checkresiduals(bestfit)
+  restest <- checkresiduals(bestfit, plot=F)
   
   #Get one-step ahead forecast with confidence interval
   sigma2 <- bestfit$sigma2
@@ -1044,7 +1067,7 @@ detect_outliers_ts <- function(in_data_forqc) {
   q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
   q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
   q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)
-
+  
   #Detect outliers through periodic STL decomposition --------------------------
   stl_outliers <- tsoutliers(q_ts, iterate = 2)
   
@@ -1078,12 +1101,12 @@ detect_outliers_ts <- function(in_data_forqc) {
     arima_outlier95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
     arima_outlier99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
   )]
-
+  
   #Format outliers
   all_flags <- melt(
     q_dt[(stl_outlier==1)|(arima_outlier99==1)|(auto_flag>0)|smooth_flag,],
-       id.vars=c('date', 'jday','year', 'Qobs'),
-       measure.vars = c('stl_outlier', 'arima_outlier99', 'auto_flag', 'smooth_flag'))  %>%
+    id.vars=c('date', 'jday','year', 'Qobs'),
+    measure.vars = c('stl_outlier', 'arima_outlier99', 'auto_flag', 'smooth_flag'))  %>%
     .[!(value %in% c(NA, 0)),]
   
   #Plot outliers ---------------------------------------------------------------
@@ -1104,7 +1127,7 @@ detect_outliers_ts <- function(in_data_forqc) {
     scale_fill_distiller(name='PDSI', palette='RdBu', direction=1) +
     scale_y_sqrt() + 
     theme_classic()
-
+  
   q_dt[, grp_int := interaction(format(date, '%Y%m'), 
                                 as.numeric(factor(PDSI, exclude = 999)))]
   
@@ -1129,16 +1152,17 @@ detect_outliers_ts <- function(in_data_forqc) {
     geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
     scale_y_sqrt() + 
     theme_classic()
-
   
+  #return statement ------------------------------------------------------------
   return(list(
-   outliers_dt = q_dt[(stl_outlier==1)|(arima_outlier95==1)
-                      |(arima_outlier99==1)|(auto_flag>0)|(smooth_flag),
-                      .(date, q_rleid, auto_flag, stl_outlier,smooth_flag,
-                          arima_outlier95, arima_outlier99)], 
-   p_fit = p_fit,
-   p_seasonal = p_fit_seasonal,
-   p_fit_forplotly = p_fit_forplotly
+    outliers_dt = q_dt[(stl_outlier==1)|(arima_outlier95==1)
+                       |(arima_outlier99==1)|(auto_flag>0)|(smooth_flag),
+                       .(date, q_rleid, auto_flag, stl_outlier,smooth_flag,
+                         arima_outlier95, arima_outlier99)], 
+    p_fit = p_fit,
+    p_seasonal = p_fit_seasonal,
+    p_fit_forplotly = p_fit_forplotly,
+    arima_model = bestfit
   ))
 }
 

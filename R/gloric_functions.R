@@ -879,7 +879,7 @@ prepare_QC_data_util <- function(in_grdc_no,
 
 #------ train_qARIMA ------------------------------------------------------------
 #Simplification of check residuals from forecast package
-LBtest_util <- function(in_mod) {
+LBtest_util <- function(in_mod, lag) {
   moddf <-  sum(arimaorder(in_mod)[c("p","q","P","Q")], na.rm = TRUE)
   modres <- residuals(in_mod)
   freq <- frequency(residuals)
@@ -893,7 +893,7 @@ LBtest_util <- function(in_mod) {
   LBtest <- Box.test(zoo::na.approx(modres), fitdf = moddf, 
                      lag = lag, type = "Ljung")
   LBtest$method <- "Ljung-Box test"
-  LBtest$data.name <- main
+  LBtest$data.name <- "Residuals"
   names(LBtest$statistic) <- "Q*"
 
     return(LBtest)
@@ -902,17 +902,18 @@ LBtest_util <- function(in_mod) {
 
 run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   setDT(in_q_dt)
-  q_ts <- ts(in_q_dt[, in_qcol, with=F], frequency=365.25)
+  q_dt <- copy(q_dt)
+  q_ts <- ts(q_dt[, in_qcol, with=F], frequency=365.25)
   
   #Identify outliers with ARIMAX -----------------------------------------------
   #If there is a nearby gauge
   test_without_nearg <- T # by default, set this to FALSE to not throw an error if there is no nearby gauge
   if (length(nearg_cols) >= 1) {
-    nearg_bclambda <- BoxCox.lambda(ts(in_q_dt[, nearg_cols, with=F], 
+    nearg_bclambda <- BoxCox.lambda(ts(q_dt[, nearg_cols, with=F], 
                                        frequency=365.25))
     
     #Get ts object of transformed data for nearby gauge
-    q_near <- in_q_dt[, get(nearg_cols)] %>%
+    q_near <- q_dt[, get(nearg_cols)] %>%
       BoxCox(lambda=nearg_bclambda) %>%
       ts(frequency=365.25)
     
@@ -926,7 +927,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     #Find best ARIMA model
     bestfit_nearg <- list(aicc=Inf)
     break_loop <- F
-    for(i in 1:6) #Select the number of Fourier series by minimizing AIC
+    for(i in 1:10) #Select the number of Fourier series by minimizing AIC
     {
       tryCatch(
         fit <- auto.arima(q_ts, 
@@ -949,7 +950,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     }
     
     #Test whether the residuals are stationary and uncorrelated
-    restests_nearg <- LBtest_util(bestfit_nearg, plot=F)
+    restests_nearg <- LBtest_util(bestfit_nearg)
     if (restests_nearg$p.value > 0.05) {
       test_without_nearg <- F
     } 
@@ -959,7 +960,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     #Find best ARIMA model (without other gauge)
     bestfit_nonearg <- list(aicc=Inf)
     break_loop <- F
-    for(i in 1:6) #Select the number of Fourier series by minimizing AIC
+    for(i in 1:10) #Select the number of Fourier series by minimizing AIC
     {
       tryCatch(
         fit <- auto.arima(q_ts, 
@@ -980,7 +981,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
       }else {break};
     }
 
-    restests_nonearg <- LBtest_util(bestfit_nearg, plot=F)
+    restests_nonearg <- LBtest_util(in_mod=bestfit_nonearg)
   }
   
   #Get the model with whitenoise residuals or lowest AICc
@@ -1004,16 +1005,17 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   
   #Get one-step ahead forecast with confidence interval
   sigma2 <- bestfit$sigma2
-  in_q_dt$fit <- fitted(bestfit, h=1)
-  in_q_dt$fit_l95 <- InvBoxCox(in_q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)
-  in_q_dt$fit_u95 <- InvBoxCox(in_q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)
-  in_q_dt$fit_l99 <- InvBoxCox(in_q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
-  in_q_dt$fit_u99 <- InvBoxCox(in_q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
-  in_q_dt$fit <- InvBoxCox(in_q_dt$fit, lambda=obs_bclambda)
+  q_dt$fit <- fitted(bestfit, h=1)
+  q_dt$fit_l95 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)
+  q_dt$fit_u95 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)
+  q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
+  q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
+  q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)
   
   return(list(
-    bestfit=bestfit,
-    restest=restest)
+    fit_dt=q_dt[, .(date, fit, fit_l95, fit_u95, fit_l99, fit_u99)],
+    mod=bestfit,
+    LBtest=LBtest)
   )
 }
 
@@ -1035,12 +1037,32 @@ detect_outliers_ts <- function(in_data) {
   obs_bclambda  <- 0.05  #BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
   q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
   
-  #Run ARIMA model to detect outliers-------------------------------------------
-  qARIMA <- run_qARIMA(in_q_dt=q_dt, in_qcol='Qobs_trans', 
-                       nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
+  #Run ARIMA model to detect potential outliers---------------------------------
+  
+  start <- Sys.time()
+  if (nrow(q_dt)>(365.25*80)) {
+    n_splits <- ceiling(nrow(q_dt)/(365.25*80))
+    dt_split <- split(q_dt, rep(1:n_splits, length.out=nrow(q_dt), 
+                                each = ceiling(nrow(q_dt)/n_splits)
+                                )
+                      )
+    qARIMA <- lapply(dt_split, function(in_dt) {
+      run_qARIMA(in_q_dt=in_dt, in_qcol='Qobs_trans', 
+                 nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
+    })
+  } else {
+    qARIMA <- run_qARIMA(in_q_dt=q_dt, in_qcol='Qobs_trans', 
+                         nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
+  }
+  print(Sys.time()-start)
+  #ARIMA is good at detecting sudden peaks, but classifies them all as peaks, 
+  #STL decomposition-based outlier detecting seems better at detecting 
+  #greater peakiness by season
+  
   
   #Detect outliers through periodic STL decomposition --------------------------
-  stl_outliers <- tsoutliers(q_ts, iterate = 2)
+  stl_outliers <- tsoutliers(ts(q_dt$Qobs_trans, frequency=365.25),
+                             iterate = 1)
   
   #Detect potential outliers through hard rules --------------------------------
   flagGRDCoutliers(q_dt)

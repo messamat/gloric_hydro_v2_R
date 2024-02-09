@@ -866,8 +866,7 @@ prepare_QC_data_util <- function(in_grdc_no,
                PDSI = nafill(PDSI, type="nocb")
              )]
   
-  #initial value flag
-  flagGRDCoutliers(q_dt_attri)
+  #Check whether there are 0
   
   return(list(
     q_dt_attri=q_dt_attri,
@@ -903,19 +902,17 @@ LBtest_util <- function(in_mod, lag) {
 run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   setDT(in_q_dt)
   q_dt <- copy(q_dt)
-  q_ts <- ts(q_dt[, in_qcol, with=F], frequency=365.25)
+  q_ts <- ts(q_dt[, get(in_qcol)], frequency=365.25)
   
   #Identify outliers with ARIMAX -----------------------------------------------
   #If there is a nearby gauge
   test_without_nearg <- T # by default, set this to FALSE to not throw an error if there is no nearby gauge
   if (length(nearg_cols) >= 1) {
-    nearg_bclambda <- BoxCox.lambda(ts(q_dt[, nearg_cols, with=F], 
-                                       frequency=365.25))
-    
     #Get ts object of transformed data for nearby gauge
-    q_near <- q_dt[, get(nearg_cols)] %>%
-      BoxCox(lambda=nearg_bclambda) %>%
+    q_near <- q_dt[, get(nearg_cols)+0.01] %>%
+      forecast::BoxCox(lambda='auto') %>%
       ts(frequency=365.25)
+    nearg_bclambda <- attr(q_near, 'lambda')
     
     #Determine lag time with highest cross-correlation between the two gauges
     maxccf_lag_nearg <- ccf(q_ts, q_near, 
@@ -993,54 +990,63 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
           & restests_nonearg$p.value > 0.05) { #If the residuals without a nearby gauge are whitenoise and those with a nearby gauge are not
         bestfit <- bestfit_nonearg
       } else { #Otherwise, pick the model with the lowest AICc
-        bestfit <- list(bestfit_nearg, bestfit_nonearg) %>%
-          .[which.min(lapply(., function(x) x$aicc))] %>%
-          .[[1]]
+        if (arimaorder(bestfit_nearg)['d'] == arimaorder(bestfit_nonearg)['d']) { #can only compare AICc if same number of differencing
+          bestfit <- list(bestfit_nearg, bestfit_nonearg) %>%
+            .[which.min(lapply(., function(x) x$aicc))] %>%
+            .[[1]]
+        } else {
+          bestfit <- bestfit_nearg
+        }
       }
     } else {
       bestfit <- bestfit_nonearg
     }
   }
-  restest <- checkresiduals(bestfit, plot=F)
+  LBtest <- checkresiduals(bestfit, plot=F)
   
   #Get one-step ahead forecast with confidence interval
   sigma2 <- bestfit$sigma2
   q_dt$fit <- fitted(bestfit, h=1)
-  q_dt$fit_l95 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)
-  q_dt$fit_u95 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)
-  q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
-  q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
-  q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)
+  q_dt$fit_l95 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)-0.01
+  q_dt$fit_u95 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)-0.01
+  q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)-0.01
+  q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)-0.01
+  q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)-0.01
+  q_dt$obsfitdiff <- q_dt[, InvBoxCox(get(in_qcol), lambda=obs_bclambda)] - q_dt$fit
   
   return(list(
-    fit_dt=q_dt[, .(date, fit, fit_l95, fit_u95, fit_l99, fit_u99)],
+    fit_dt=q_dt[, .(date, fit, fit_l95, fit_u95, fit_l99, fit_u99, obsfitdiff)],
     mod=bestfit,
-    LBtest=LBtest)
+    LBtest=LBtest,
+    sigma2=sigma2)
   )
 }
 
 
+# #------ detect_outliers_ts ----------------------------------------------------
+# in_data<- tar_read(data_for_qc)
+# arima_split=F
 
-#------ detect_outliers_ts ----------------------------------------------------
-#in_data<- tar_read(data_for_qc)
-
-detect_outliers_ts <- function(in_data) {
+detect_outliers_ts <- function(in_data, arima_split=F) {
   in_dt <- in_data$q_dt_attri
   
   #Subset columns and remove negative values
   nearg_cols <- in_data$near_gcols_sel
-  ts_cols <- c('date', 'Qobs', 'jday', 'year', 'PDSI')
+  ts_cols <- c('date', 'Qobs', 'year', 'missingdays','PDSI')
   q_dt <- in_dt[, c(ts_cols, nearg_cols), with=F] %>%
     .[Qobs < 0, Qobs := NA] 
   
   #Transform discharge and create time series object
   obs_bclambda  <- 0.05  #BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
-  q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
+  q_dt[, Qobs_trans := BoxCox(Qobs+0.01, lambda=obs_bclambda)]
+  
+  if (length(nearg_cols) > 1) {
+    nearg_cols <- nearg_cols[[1]]
+  }
   
   #Run ARIMA model to detect potential outliers---------------------------------
-  
-  start <- Sys.time()
-  if (nrow(q_dt)>(365.25*80)) {
+  #start <- Sys.time()
+  if ((nrow(q_dt)>(365.25*80)) & arima_split) {
     n_splits <- ceiling(nrow(q_dt)/(365.25*80))
     dt_split <- split(q_dt, rep(1:n_splits, length.out=nrow(q_dt), 
                                 each = ceiling(nrow(q_dt)/n_splits)
@@ -1054,23 +1060,48 @@ detect_outliers_ts <- function(in_data) {
     qARIMA <- run_qARIMA(in_q_dt=q_dt, in_qcol='Qobs_trans', 
                          nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
   }
-  print(Sys.time()-start)
+  #print(Sys.time()-start)
   #ARIMA is good at detecting sudden peaks, but classifies them all as peaks, 
   #STL decomposition-based outlier detecting seems better at detecting 
   #greater peakiness by season
   
+  #Join ARIMA to dt 
+  q_dt <- merge(q_dt, qARIMA$fit_dt, by='date', all.x=T)
+  q_dt[, date := as.Date(date)] %>%
+    .[, jday := as.numeric(format(date, '%j'))]
+
+  #Find differences from forecast outside of the julian day 90% interval
+  obsfitdiff_roll_dt <- lapply(seq(366), function(i) {
+    dt_processed <- q_dt[
+      jday==i, 
+      list(i,
+           obsfitdiff_roll_l = .SD[(jday >= i-7) & (jday <= i +7),
+                                   quantile(obsfitdiff, 0.025, na.rm=T)],
+           obsfitdiff_roll_u = .SD[(jday >= i-7) & (jday <= i +7),
+                                   quantile(obsfitdiff, 0.975, na.rm=T)]
+      )
+    ]
+    return(dt_processed)
+  }) %>% rbindlist
+
   
+  q_dt <- merge(q_dt, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
+    .[order(date),]
+  q_dt[, arima_outlier_rolldiff := fifelse(
+    ((Qobs < fit_l99) & (obsfitdiff<0) & (obsfitdiff<(obsfitdiff_roll_l*2))) | 
+      ((Qobs > fit_u99) & (obsfitdiff>0) & (obsfitdiff>(obsfitdiff_roll_u*2))), 1, 0)]
+
   #Detect outliers through periodic STL decomposition --------------------------
-  stl_outliers <- tsoutliers(ts(q_dt$Qobs_trans, frequency=365.25),
+  q_dt_sub <- q_dt[missingdays < 90,]
+  stl_outliers <- tsoutliers(ts(q_dt_sub$Qobs_trans, frequency=365.25),
                              iterate = 1)
+  q_dt[date %in% q_dt_sub[stl_outliers$index, date], stl_outlier := 1]
   
   #Detect potential outliers through hard rules --------------------------------
   flagGRDCoutliers(q_dt)
   setnames(q_dt, 'flag_mathis', 'auto_flag')
   
   #Detect abnormally smooth stretches ------------------------------------------
-  q_dt[,`:=`(date = as.Date(date))]
-  
   #Identify periods of at least 7 days whose CV in second order difference
   # is below the 10th percentile for their respective calendar day
   q_dt[, Qobs_diff2 := c(NA, NA, diff(Qobs_trans, differences=2))] %>%
@@ -1086,24 +1117,25 @@ detect_outliers_ts <- function(in_data) {
   # )
   
   #Mark potential outliers -----------------------------------------------------
-  q_dt[stl_outliers$index, stl_outlier := 1]
   q_dt[, `:=`(
-    arima_outlier95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
-    arima_outlier99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
+    arima_outlier_95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
+    arima_outlier_99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
   )]
   
   #Format outliers
   all_flags <- melt(
-    q_dt[(stl_outlier==1)|(arima_outlier99==1)|(auto_flag>0)|smooth_flag,],
+    q_dt[(stl_outlier==1)|(arima_outlier_99==1)|(auto_flag>0)|smooth_flag
+         |(arima_outlier_rolldiff==1),],
     id.vars=c('date', 'jday','year', 'Qobs'),
-    measure.vars = c('stl_outlier', 'arima_outlier99', 'auto_flag', 'smooth_flag'))  %>%
+    measure.vars = c('stl_outlier', 'arima_outlier_rolldiff',
+                     'auto_flag', 'smooth_flag'))  %>%
     .[!(value %in% c(NA, 0)),]
   
   #Plot outliers ---------------------------------------------------------------
   p_rect_dat <- q_dt[!is.na(PDSI), .(date, PDSI)] %>%
     .[, trimester := lubridate::round_date(date, unit='3 months')] %>%
     .[!duplicated(trimester),] %>%
-    .[, end_date := .SD[.I+1, trimester]-1]
+    .[order(trimester), end_date := .SD[.I+1, trimester]-1]
   
   p_ymin <- q_dt[, min(c(min(Qobs,na.rm=T), 
                        min(fit_l99, na.rm=T)))]
@@ -1151,14 +1183,14 @@ detect_outliers_ts <- function(in_data) {
   
   #return statement ------------------------------------------------------------
   return(list(
-    outliers_dt = q_dt[(stl_outlier==1)|(arima_outlier95==1)
-                       |(arima_outlier99==1)|(auto_flag>0)|(smooth_flag),
+    outliers_dt = q_dt[(stl_outlier==1)|(arima_outlier_95==1)
+                       |(arima_outlier_99==1)|(auto_flag>0)|(smooth_flag),
                        .(date, q_rleid, auto_flag, stl_outlier,smooth_flag,
-                         arima_outlier95, arima_outlier99)], 
+                         arima_outlier_95, arima_outlier_99)], 
     p_fit = p_fit,
     p_seasonal = p_fit_seasonal,
     p_fit_forplotly = p_fit_forplotly,
-    arima_model = bestfit
+    arima_model = qARIMA$mod
   ))
 }
 

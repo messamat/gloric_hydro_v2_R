@@ -150,11 +150,11 @@ list(
                                      max_crop = 25, #max 25% of upstream area cultivated
                                      max_pop = 100, #max 100 people/km2 upstream
                                      max_built = 1 #max 1% of upstream area is "built"
-             )  
+             ) 
   )
   ,
   tar_target(data_for_qc,
-             prepare_QC_data_util(in_grdc_no=4208720,
+             prepare_QC_data_util(in_grdc_no=1496161,
                                   in_ref_gauges=ref_gauges,
                                   in_gmeta_formatted=gmeta_formatted,
                                   #in_geodist,
@@ -165,20 +165,24 @@ list(
                                   in_riggs2023=gauges_satQ)
   )
   ,
-  
-  tar_target(outlier_plot,
-             plotGRDCtimeseries(GRDCgaugestats_record=data_for_qc$q_dt_attri,
-                                outpath=NULL,
-                                maxgap = 366,
-                                showmissing = T)
-             )
-  ,
 
-  tar_target(
-    q_outliers_flags,
-    detect_outliers_ts(in_data=data_for_qc)
-  )
   
-  #Fill small gaps
+  
+  # tar_target(
+  #   q_outliers_flags,
+  #   detect_outliers_ts(in_data=data_for_qc)
+  # )
+  
+  
 )
 
+
+
+
+# tar_target(outlier_plot,
+#            plotGRDCtimeseries(GRDCgaugestats_record=data_for_qc$q_dt_attri,
+#                               outpath=NULL,
+#                               maxgap = 366,
+#                               showmissing = T)
+#            )
+# ,

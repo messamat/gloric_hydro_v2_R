@@ -876,32 +876,43 @@ prepare_QC_data_util <- function(in_grdc_no,
 }
 
 
-#------ train_outlier_model ----------------------------------------------------
-#in_data<- tar_read(data_for_qc)
 
-detect_outliers_ts <- function(in_data) {
-  in_dt <- in_data$q_dt_attri
+#------ train_qARIMA ------------------------------------------------------------
+#Simplification of check residuals from forecast package
+LBtest_util <- function(in_mod) {
+  moddf <-  sum(arimaorder(in_mod)[c("p","q","P","Q")], na.rm = TRUE)
+  modres <- residuals(in_mod)
+  freq <- frequency(residuals)
+
+  if (missing(lag)) {
+    lag <- ifelse(freq > 1, 2 * freq, 10)
+    lag <- min(lag, round(length(modres)/5))
+    lag <- max(moddf + 3, lag)
+  }
   
-  #Subset columns and remove negative values
-  nearg_cols <- in_data$near_gcols_sel
-  ts_cols <- c('date', 'Qobs', 'jday', 'year', 'PDSI')
-  q_dt <- in_dt[, c(ts_cols, nearg_cols), with=F] %>%
-    .[Qobs < 0, Qobs := NA] 
-  
-  #Transform discharge and create time series object
-  obs_bclambda  <- BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
-  q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
-  q_ts <- ts(q_dt$Qobs_trans, frequency=365.25)
+  LBtest <- Box.test(zoo::na.approx(modres), fitdf = moddf, 
+                     lag = lag, type = "Ljung")
+  LBtest$method <- "Ljung-Box test"
+  LBtest$data.name <- main
+  names(LBtest$statistic) <- "Q*"
+
+    return(LBtest)
+}
+
+
+run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
+  setDT(in_q_dt)
+  q_ts <- ts(in_q_dt[, in_qcol, with=F], frequency=365.25)
   
   #Identify outliers with ARIMAX -----------------------------------------------
   #If there is a nearby gauge
   test_without_nearg <- T # by default, set this to FALSE to not throw an error if there is no nearby gauge
   if (length(nearg_cols) >= 1) {
-    nearg_bclambda <- BoxCox.lambda(ts(q_dt[, nearg_cols, with=F], 
+    nearg_bclambda <- BoxCox.lambda(ts(in_q_dt[, nearg_cols, with=F], 
                                        frequency=365.25))
     
     #Get ts object of transformed data for nearby gauge
-    q_near <- q_dt[, get(nearg_cols)] %>%
+    q_near <- in_q_dt[, get(nearg_cols)] %>%
       BoxCox(lambda=nearg_bclambda) %>%
       ts(frequency=365.25)
     
@@ -938,7 +949,7 @@ detect_outliers_ts <- function(in_data) {
     }
     
     #Test whether the residuals are stationary and uncorrelated
-    restests_nearg <- checkresiduals(bestfit_nearg, plot=F)
+    restests_nearg <- LBtest_util(bestfit_nearg, plot=F)
     if (restests_nearg$p.value > 0.05) {
       test_without_nearg <- F
     } 
@@ -968,8 +979,8 @@ detect_outliers_ts <- function(in_data) {
         bestfit_nonearg <- fit #Keep model with lowest AIC
       }else {break};
     }
-    
-    restests_nonearg <- checkresiduals(bestfit_nonearg, plot=F)
+
+    restests_nonearg <- LBtest_util(bestfit_nearg, plot=F)
   }
   
   #Get the model with whitenoise residuals or lowest AICc
@@ -993,12 +1004,40 @@ detect_outliers_ts <- function(in_data) {
   
   #Get one-step ahead forecast with confidence interval
   sigma2 <- bestfit$sigma2
-  q_dt$fit <- fitted(bestfit, h=1)
-  q_dt$fit_l95 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)
-  q_dt$fit_u95 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)
-  q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
-  q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
-  q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)
+  in_q_dt$fit <- fitted(bestfit, h=1)
+  in_q_dt$fit_l95 <- InvBoxCox(in_q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)
+  in_q_dt$fit_u95 <- InvBoxCox(in_q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)
+  in_q_dt$fit_l99 <- InvBoxCox(in_q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)
+  in_q_dt$fit_u99 <- InvBoxCox(in_q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)
+  in_q_dt$fit <- InvBoxCox(in_q_dt$fit, lambda=obs_bclambda)
+  
+  return(list(
+    bestfit=bestfit,
+    restest=restest)
+  )
+}
+
+
+
+#------ detect_outliers_ts ----------------------------------------------------
+#in_data<- tar_read(data_for_qc)
+
+detect_outliers_ts <- function(in_data) {
+  in_dt <- in_data$q_dt_attri
+  
+  #Subset columns and remove negative values
+  nearg_cols <- in_data$near_gcols_sel
+  ts_cols <- c('date', 'Qobs', 'jday', 'year', 'PDSI')
+  q_dt <- in_dt[, c(ts_cols, nearg_cols), with=F] %>%
+    .[Qobs < 0, Qobs := NA] 
+  
+  #Transform discharge and create time series object
+  obs_bclambda  <- 0.05  #BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
+  q_dt[, Qobs_trans := BoxCox(Qobs, lambda=obs_bclambda)]
+  
+  #Run ARIMA model to detect outliers-------------------------------------------
+  qARIMA <- run_qARIMA(in_q_dt=q_dt, in_qcol='Qobs_trans', 
+                       nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
   
   #Detect outliers through periodic STL decomposition --------------------------
   stl_outliers <- tsoutliers(q_ts, iterate = 2)
@@ -1007,7 +1046,7 @@ detect_outliers_ts <- function(in_data) {
   flagGRDCoutliers(q_dt)
   setnames(q_dt, 'flag_mathis', 'auto_flag')
   
-  #Detect anormally smooth stretches -------------------------------------------
+  #Detect abnormally smooth stretches ------------------------------------------
   q_dt[,`:=`(date = as.Date(date))]
   
   #Identify periods of at least 7 days whose CV in second order difference
@@ -1080,6 +1119,7 @@ detect_outliers_ts <- function(in_data) {
     theme_classic()
   
   p_fit_forplotly <- ggplot(data=q_dt) +
+    geom_point(aes(x=date, y=Qobs), alpha=1/3) +
     geom_line(aes(x=date, y=Qobs), size=1.2) +
     #geom_line(aes(x=date, y=fit),  color='orange') +
     geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +

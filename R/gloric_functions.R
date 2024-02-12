@@ -749,7 +749,7 @@ filter_reference_gauges <- function(in_gmeta_formatted,
     plot = ref_gauges_ts)
   )
 }
-#------ prepare_QC_data --------------------------------------------------------
+#------ prepare_QC_data_util ---------------------------------------------------
 # in_grdc_no=3651650
 # in_ref_gauges = tar_read(ref_gauges)
 # in_gmeta_formatted = tar_read(gmeta_formatted)
@@ -776,25 +776,12 @@ prepare_QC_data_util <- function(in_grdc_no,
   #Get basic metadata and discharge observations
   filepath <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
   q_dt <- readformatGRDC(filepath)
-  
-  med_q <- median(q_dt[missingdays<30, median(Qobs)])
-  
-  #Get discharge  data from upstream and downstream gauges
-  netnear_gauges <- in_netdist[grdc_no ==in_grdc_no,]
-  #geonear_gauges <- in_geodist[grdc_no ==in_grdc_no,]
-  
-  get_nearg_qobs <- function(in_grdc_no, in_direction){
-    path_up <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
-    q_up <- readformatGRDC(path_up) %>%
-      .[, c('date', 'Qobs'), with=F] 
-    return(q_up)
-  }
-  
+
   #Merge all data
-  q_dt_attri <- merge(q_dt, #merge anthropo data
+  q_dt_attri <- merge(q_dt, #merge anthropo data, keeping only reference years
                       gauges_anthropo[, -c('n_years'), with=F],
                       by=c('grdc_no','year'),
-                      all.x=T
+                      all.x=F
   ) %>%
     merge(in_tmax[grdc_no == in_grdc_no], #merge tmax
           by.x=c('grdc_no', 'date'), by.y=c('grdc_no', 'time'),
@@ -812,21 +799,36 @@ prepare_QC_data_util <- function(in_grdc_no,
           all.x=T
     )
   
+  #Get discharge  data from upstream and downstream gauges
+  netnear_gauges <- in_netdist[ #Make sure these are also ref_gauges
+    (grdc_no ==in_grdc_no) & 
+      (grdc_no_destination %in% in_ref_gauges$dt$grdc_no),]
+  
+  #Get the corresponding data
+  get_nearg_qobs <- function(in_grdc_no, in_direction){
+    path_up <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
+    q_up <- readformatGRDC(path_up) %>%
+      .[, c('date', 'Qobs'), with=F] 
+    return(q_up)
+  }
   
   if (nrow(netnear_gauges)>0) {
+    #Create a cast data.table of discharge for those gauges
     near_gaugesq <- netnear_gauges[
       , get_nearg_qobs(in_grdc_no=grdc_no_destination, 
                        in_direction=dist_net_dir)
-      , by=c('grdc_no_destination', 'dist_net_dir')]%>%
+      , by=c('grdc_no_destination', 'dist_net_dir')] %>%
       .[, colname := paste0('Qobs_', dist_net_dir, '_', grdc_no_destination)] %>%
       dcast(date~colname,
             value.var='Qobs'
       )
+    
+    #Merge them to the main table
     q_dt_attri <-  q_dt_attri %>% 
       merge(near_gaugesq, by='date', all.x=T) %>%
     .[, date := as.Date(date)]
     
-    #Sort near gauges based on overlap and similarity in median Q
+    #Sort near gauges based on overlap and similarity in median Q----------
     nearg_cols <- grep('Qobs_(down|up)stream_travel_.*',
                        names(q_dt_attri),
                        value=T)
@@ -834,16 +836,23 @@ prepare_QC_data_util <- function(in_grdc_no,
     #Check number of years where both the target ts has less than 30 missing days
     # and number of years where the ref ts has less than 30 missing days
     near_gcols_stats <- lapply(nearg_cols, function(gcol) {
+      #print(gcol)
       ntotal_yrs <-  q_dt_attri[, .SD[(sum(is.na(Qobs))<30),], by=year] %>%
         .[, length(unique(year))]
       common_yrs <- q_dt_attri[, .SD[(sum(is.na(get(gcol)))<30) &
                                        (sum(is.na(Qobs))<30),], by=year]
       ncommon_yrs <- common_yrs[, length(unique(year))]
-      cc_all <- common_yrs[, ccf(ts(log(get(gcol)+0.01)), ts(log(Qobs+0.01)), 
-                                 na.action=na.pass,
-                                 i = 10,
-                                 plot=F)]
-      max_cc <- max(cc_all$acf)
+      
+      if (ncommon_yrs > 5) {
+        cc_all <- common_yrs[, ccf(ts(log(get(gcol)+0.01)), ts(log(Qobs+0.01)), 
+                                   na.action=na.pass,
+                                   i = 10,
+                                   plot=F)]
+        max_cc <- max(cc_all$acf)
+      } else {
+        max_cc <-NA
+      }
+
       
       return(data.table(
         col=gcol,
@@ -867,11 +876,19 @@ prepare_QC_data_util <- function(in_grdc_no,
              )]
   
   #Check whether there are 0
+  potential_npr <- q_dt_attri[, .SD[Qobs<0.01,.N]>0]
+  
+  #Computer the percentage of integer values
+  integer_perc <- q_dt_attri[!is.na(Qobs), 
+                             sum(fifelse(Qobs == round(Qobs), 1, 0))/.N]
+  
   
   return(list(
     q_dt_attri=q_dt_attri,
-    near_gcols_sel = near_gcols_sel)
-  )
+    near_gcols_sel = near_gcols_sel,
+    potential_npr = potential_npr,
+    integer_perc = integer_perc
+  ))
 }
 
 
@@ -901,7 +918,7 @@ LBtest_util <- function(in_mod, lag) {
 
 run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   setDT(in_q_dt)
-  q_dt <- copy(q_dt)
+  q_dt <- copy(in_q_dt)
   q_ts <- ts(q_dt[, get(in_qcol)], frequency=365.25)
   
   #Identify outliers with ARIMAX -----------------------------------------------
@@ -1023,8 +1040,9 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
 }
 
 
-# #------ detect_outliers_ts ----------------------------------------------------
-# in_data<- tar_read(data_for_qc)
+#------ detect_outliers_ts ----------------------------------------------------
+# data_for_qc<- tar_read(data_for_qc)
+# in_data <- qread(data_for_qc[potential_npr==T, qs_path][[1]])
 # arima_split=F
 
 detect_outliers_ts <- function(in_data, arima_split=F) {
@@ -1162,7 +1180,7 @@ detect_outliers_ts <- function(in_data, arima_split=F) {
     #                 fill=PDSI, group=grp_int), 
     #             alpha=1/5) + 
     #geom_point(aes(color=year), alpha=1/4) +
-    geom_line(aes(color=PDSI, group=grp_int), size=1) +
+    geom_line(aes(color=PDSI, group=grp_int), linewidth=1) +
     #geom_line(aes(x=jday, y=get(nearg_cols[[1]]), group=year), color='blue') +
     scale_color_distiller(palette='Spectral', direction=1) +
     scale_fill_distiller(palette='Spectral', direction=1) +
@@ -1174,7 +1192,7 @@ detect_outliers_ts <- function(in_data, arima_split=F) {
   
   p_fit_forplotly <- ggplot(data=q_dt) +
     geom_point(aes(x=date, y=Qobs), alpha=1/3) +
-    geom_line(aes(x=date, y=Qobs), size=1.2) +
+    geom_line(aes(x=date, y=Qobs), linewidth=1.2) +
     #geom_line(aes(x=date, y=fit),  color='orange') +
     geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
     scale_x_date(date_breaks="1 year") +
@@ -1230,4 +1248,37 @@ detect_outliers_ts <- function(in_data, arima_split=F) {
 # plot(forecast(check, h=365.25))
 #check<- features(q_ts,Qobs, feature_set(pkgs = "feasts")) #Get all features from feasts
 #check <- tsoutliers(ts(log(q_ts$Qobs+0.01), 365.25)) #look for outliers
+
+
+#------ manually QC data -------------------------------------------------------
+# dat_qs_list <- tar_read(data_for_qc)[potential_npr==T & integer_perc < 0.80, qs_path]
+# outlier_qs_list <- file.path(temp_qs_dir,
+#                              gsub('data_for_qc_', 'q_outliers_flags_',
+#                                   basename(dat_qs_list)))
+# 
+# for (i in seq(1, 20)) {
+#   in_dat_path <- dat_qs_list[[i]]
+#   in_qs <- file.path(temp_qs_dir,
+#                      gsub('data_for_qc_',
+#                           'q_outliers_flags_',
+#                           basename(in_dat_path))
+#   )
+#   in_dat <- qread(in_dat_path)$q_dt_attri
+#   integer_perc <- in_dat[!is.na(Qobs),
+#                          sum(fifelse(Qobs == round(Qobs), 1, 0))/.N]
+#   print(integer_perc)
+# }
+# 
+# in_dat_path <- dat_qs_list[[5]]
+# in_qs <- file.path(temp_qs_dir,
+#                    gsub('data_for_qc_',
+#                         'q_outliers_flags_',
+#                         basename(in_dat_path))
+# )
+# in_dat <- qread(in_dat_path)$q_dt_attri
+# in_outliers_qs <- qread(in_qs)
+# in_outliers <- in_outliers_qs$outliers_dt
+# 
+# in_outliers_qs$p_fit_forplotly$data
+
 

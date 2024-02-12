@@ -4,15 +4,19 @@ source("R/gloric_functions.R")
 rootdir = rprojroot::find_root(has_dir('src'))
 datdir = file.path(rootdir, 'data')
 resdir = file.path(rootdir, 'results')
+temp_qs_dir = file.path(resdir, 'temp_qs')
+if (!dir.exists(temp_qs_dir)) {
+  dir.create(temp_qs_dir)
+}
 
+nthreads <- round(parallel::detectCores()*0.75)
+plan(multisession, workers=nthreads)
 tar_option_set(format = "qs",
-               controller= crew_controller_local(workers = 4))
-
-#--- Data repositories --------------------------------------------------------
-
+               controller= crew_controller_local(workers = nthreads))
 
 #--- Parameters ---------------------------------------------------------------
 min_yrs = 20
+overwrite=T
 
 ############################# Define targets plan ##############################
 list(
@@ -153,27 +157,67 @@ list(
              ) 
   )
   ,
+  #Prepare data for QCing
   tar_target(data_for_qc,
-             prepare_QC_data_util(in_grdc_no=1496161,
-                                  in_ref_gauges=ref_gauges,
-                                  in_gmeta_formatted=gmeta_formatted,
-                                  #in_geodist,
-                                  in_netdist=netdist,
-                                  in_tmax=gauges_tmax,
-                                  in_pdsi=gauges_pdsi,
-                                  in_rivice=gauges_rivice,
-                                  in_riggs2023=gauges_satQ)
+             future_lapply(
+               unique(ref_gauges$dt$grdc_no), 
+               function(in_no) {
+                 print(in_no)
+                 out_qs <- file.path(temp_qs_dir, 
+                                     paste0('data_for_qc_', in_no, '.qs')
+                 )
+                 
+                 out_list <- prepare_QC_data_util(
+                   in_grdc_no=in_no,
+                   in_ref_gauges=ref_gauges,
+                   in_gmeta_formatted=gmeta_formatted,
+                   #in_geodist,
+                   in_netdist=netdist,
+                   in_tmax=gauges_tmax,
+                   in_pdsi=gauges_pdsi,
+                   in_rivice=gauges_rivice,
+                   in_riggs2023=gauges_satQ) 
+                 
+                 if (!file.exists(out_qs) | overwrite) {
+                   qsave(out_list$q_dt_attri, out_qs)
+                 }
+                 
+                 return(data.table(qs_path = out_qs,
+                                   potential_npr = out_list$potential_npr,
+                                   integer_perc = out_list$integer_perc,
+                                   near_gcols_sel = out_list$near_gcols_sel)
+                 )
+               }
+               ) %>% rbindlist
+  ),
+  
+  tar_target(q_outliers_flags,
+             future_lapply(
+               data_for_qc[potential_npr==T & integer_perc<0.95, qs_path], 
+               function(in_path) {
+                 print(in_path)
+                 out_qs <- file.path(temp_qs_dir, 
+                                     gsub('data_for_qc_', 
+                                          'q_outliers_flags_',
+                                          basename(in_path))
+                                     )
+                 
+            
+                 if (!file.exists(out_qs) | overwrite) {
+                   out_flags <- detect_outliers_ts(in_data=qread(in_path))
+                   qsave(out_flags, out_qs)
+                 }
+                 
+                 return(out_qs)
+               }
+             )
   )
-  ,
-
-  
-  
-  # tar_target(
-  #   q_outliers_flags,
-  #   detect_outliers_ts(in_data=data_for_qc)
-  # )
-  
-  
+  # ,
+# 
+#   tar_target(
+#     q_outliers_flags,
+#     detect_outliers_ts(in_data=data_for_qc)
+#   )
 )
 
 

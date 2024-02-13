@@ -891,8 +891,6 @@ prepare_QC_data_util <- function(in_grdc_no,
   ))
 }
 
-
-
 #------ train_qARIMA ------------------------------------------------------------
 #Simplification of check residuals from forecast package
 LBtest_util <- function(in_mod, lag) {
@@ -923,8 +921,16 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   
   #Identify outliers with ARIMAX -----------------------------------------------
   #If there is a nearby gauge
-  test_without_nearg <- T # by default, set this to FALSE to not throw an error if there is no nearby gauge
-  if (length(nearg_cols) >= 1) {
+   # by default, set this to FALSE to not throw an error if there is no nearby gauge
+  if ((length(nearg_cols) >= 1) & !any(is.na(nearg_cols))) {
+    nearg <- T
+    test_without_nearg <- F
+  } else {
+    test_without_nearg <- T
+    nearg <- F
+  }
+  
+  if (!test_without_nearg) {
     #Get ts object of transformed data for nearby gauge
     q_near <- q_dt[, get(nearg_cols)+0.01] %>%
       forecast::BoxCox(lambda='auto') %>%
@@ -970,7 +976,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     } 
   }
   
-  if ((length(nearg_cols)==0) | (test_without_nearg)) {
+  if ((!nearg) | (test_without_nearg)) {
     #Find best ARIMA model (without other gauge)
     bestfit_nonearg <- list(aicc=Inf)
     break_loop <- F
@@ -1002,7 +1008,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   if (!test_without_nearg) { #If there was no testing without a nearby gauge
     bestfit <- bestfit_nearg
   } else {
-    if (length(nearg_cols) >= 1) { #If there was testing with and without a nearby gauge
+    if (nearg) { #If there was testing with and without a nearby gauge
       if (restests_nearg$p.value < 0.05 
           & restests_nonearg$p.value > 0.05) { #If the residuals without a nearby gauge are whitenoise and those with a nearby gauge are not
         bestfit <- bestfit_nonearg
@@ -1042,41 +1048,42 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
 
 #------ detect_outliers_ts ----------------------------------------------------
 # data_for_qc<- tar_read(data_for_qc)
-# in_data <- qread(data_for_qc[potential_npr==T, qs_path][[1]])
+# in_row <- data_for_qc[potential_npr==T & integer_perc<0.95,][77,]
+# in_data <- qread(in_row[, qs_path][[1]])
+# in_nearg_cols <- in_row[, near_gcols_sel][[1]]
 # arima_split=F
+# plot_fit = F
+# 
+# detect_outliers_ts(in_data, in_nearg_cols, arima_split=F, plot_fit=F) 
 
-detect_outliers_ts <- function(in_data, arima_split=F) {
-  in_dt <- in_data$q_dt_attri
-  
-  #Subset columns and remove negative values
-  nearg_cols <- in_data$near_gcols_sel
+detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F) {
+  #Remove negative values
   ts_cols <- c('date', 'Qobs', 'year', 'missingdays','PDSI')
-  q_dt <- in_dt[, c(ts_cols, nearg_cols), with=F] %>%
-    .[Qobs < 0, Qobs := NA] 
+  in_data[Qobs < 0, Qobs := NA]  #[, c(ts_cols, in_nearg_cols), with=F] %>%
   
   #Transform discharge and create time series object
   obs_bclambda  <- 0.05  #BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
-  q_dt[, Qobs_trans := BoxCox(Qobs+0.01, lambda=obs_bclambda)]
+  in_data[, Qobs_trans := BoxCox(Qobs+0.01, lambda=obs_bclambda)]
   
-  if (length(nearg_cols) > 1) {
-    nearg_cols <- nearg_cols[[1]]
+  if (length(in_nearg_cols) > 1) {
+    in_nearg_cols <- in_nearg_cols[[1]]
   }
   
   #Run ARIMA model to detect potential outliers---------------------------------
   #start <- Sys.time()
-  if ((nrow(q_dt)>(365.25*80)) & arima_split) {
-    n_splits <- ceiling(nrow(q_dt)/(365.25*80))
-    dt_split <- split(q_dt, rep(1:n_splits, length.out=nrow(q_dt), 
-                                each = ceiling(nrow(q_dt)/n_splits)
+  if ((nrow(in_data)>(365.25*80)) & arima_split) {
+    n_splits <- ceiling(nrow(in_data)/(365.25*80))
+    dt_split <- split(in_data, rep(1:n_splits, length.out=nrow(in_data), 
+                                each = ceiling(nrow(in_data)/n_splits)
                                 )
                       )
     qARIMA <- lapply(dt_split, function(in_dt) {
       run_qARIMA(in_q_dt=in_dt, in_qcol='Qobs_trans', 
-                 nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
+                 nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda)
     })
   } else {
-    qARIMA <- run_qARIMA(in_q_dt=q_dt, in_qcol='Qobs_trans', 
-                         nearg_cols=nearg_cols, obs_bclambda=obs_bclambda)
+    qARIMA <- run_qARIMA(in_q_dt=in_data, in_qcol='Qobs_trans', 
+                         nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda)
   }
   #print(Sys.time()-start)
   #ARIMA is good at detecting sudden peaks, but classifies them all as peaks, 
@@ -1084,13 +1091,13 @@ detect_outliers_ts <- function(in_data, arima_split=F) {
   #greater peakiness by season
   
   #Join ARIMA to dt 
-  q_dt <- merge(q_dt, qARIMA$fit_dt, by='date', all.x=T)
-  q_dt[, date := as.Date(date)] %>%
+  in_data <- merge(in_data, qARIMA$fit_dt, by='date', all.x=T)
+  in_data[, date := as.Date(date)] %>%
     .[, jday := as.numeric(format(date, '%j'))]
 
   #Find differences from forecast outside of the julian day 90% interval
   obsfitdiff_roll_dt <- lapply(seq(366), function(i) {
-    dt_processed <- q_dt[
+    dt_processed <- in_data[
       jday==i, 
       list(i,
            obsfitdiff_roll_l = .SD[(jday >= i-7) & (jday <= i +7),
@@ -1103,115 +1110,175 @@ detect_outliers_ts <- function(in_data, arima_split=F) {
   }) %>% rbindlist
 
   
-  q_dt <- merge(q_dt, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
+  in_data <- merge(in_data, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
     .[order(date),]
-  q_dt[, arima_outlier_rolldiff := fifelse(
+  in_data[, arima_outlier_rolldiff := fifelse(
     ((Qobs < fit_l99) & (obsfitdiff<0) & (obsfitdiff<(obsfitdiff_roll_l*2))) | 
       ((Qobs > fit_u99) & (obsfitdiff>0) & (obsfitdiff>(obsfitdiff_roll_u*2))), 1, 0)]
 
   #Detect outliers through periodic STL decomposition --------------------------
-  q_dt_sub <- q_dt[missingdays < 90,]
-  stl_outliers <- tsoutliers(ts(q_dt_sub$Qobs_trans, frequency=365.25),
-                             iterate = 1)
-  q_dt[date %in% q_dt_sub[stl_outliers$index, date], stl_outlier := 1]
-  
+  in_data_sub <- in_data[missingdays < 90,]
+  if (nrow(in_data_sub) > 1) {
+    stl_outliers <- tsoutliers(ts(in_data_sub$Qobs_trans, frequency=365.25),
+                               iterate = 1)
+    in_data[date %in% in_data_sub[stl_outliers$index, date], stl_outlier := 1]
+  } else {
+    in_data[, stl_outlier := 0]
+  }
+
   #Detect potential outliers through hard rules --------------------------------
-  flagGRDCoutliers(q_dt)
-  setnames(q_dt, 'flag_mathis', 'auto_flag')
+  flagGRDCoutliers(in_data)
+  setnames(in_data, 'flag_mathis', 'auto_flag')
   
   #Detect abnormally smooth stretches ------------------------------------------
   #Identify periods of at least 7 days whose CV in second order difference
   # is below the 10th percentile for their respective calendar day
-  q_dt[, Qobs_diff2 := c(NA, NA, diff(Qobs_trans, differences=2))] %>%
+  in_data[, Qobs_diff2 := c(NA, NA, diff(Qobs_trans, differences=2))] %>%
     .[, Qdiff2_rollcv := frollapply(Qobs_diff2, n=10, sd)/abs(frollmean(Qobs_diff2, n=10))] 
-  q_dt[, Qdiff2_rollcv_jdayq90 := quantile(Qdiff2_rollcv, 1/10, na.rm=T), by=jday]
-  q_dt[, smooth_flag := (.N>7)&(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90), 
+  in_data[, Qdiff2_rollcv_jdayq90 := quantile(Qdiff2_rollcv, 1/10, na.rm=T), by=jday]
+  in_data[, smooth_flag := (.N>7)&(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90), 
        by=rleid(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90)]
   
-  # ggplotly(ggplot(q_dt, aes(x=date, y=Qobs_trans)) +
+  # ggplotly(ggplot(in_data, aes(x=date, y=Qobs_trans)) +
   #   geom_line() +
-  #   geom_point(data=q_dt[smooth_flag,], 
+  #   geom_point(data=in_data[smooth_flag,], 
   #              aes(color= smooth_flag))
   # )
   
   #Mark potential outliers -----------------------------------------------------
-  q_dt[, `:=`(
-    arima_outlier_95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
-    arima_outlier_99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
-  )]
+  # in_data[, `:=`(
+  #   arima_outlier_95 = fifelse((Qobs < fit_l95) | (Qobs > fit_u95), 1, 0),
+  #   arima_outlier_99 = fifelse((Qobs < fit_l99) | (Qobs > fit_u99), 1, 0)
+  # )]
   
-  #Format outliers
-  all_flags <- melt(
-    q_dt[(stl_outlier==1)|(arima_outlier_99==1)|(auto_flag>0)|smooth_flag
-         |(arima_outlier_rolldiff==1),],
-    id.vars=c('date', 'jday','year', 'Qobs'),
-    measure.vars = c('stl_outlier', 'arima_outlier_rolldiff',
-                     'auto_flag', 'smooth_flag'))  %>%
-    .[!(value %in% c(NA, 0)),]
+  in_data[, all_flags := fcase(
+    stl_outlier==1, 'Stl flag',
+    auto_flag>0, 'Auto flag',
+    smooth_flag==T, 'Smooth flag',
+    arima_outlier_rolldiff==1, 'Arima flag',
+    default='No flag')]
   
   #Plot outliers ---------------------------------------------------------------
-  p_rect_dat <- q_dt[!is.na(PDSI), .(date, PDSI)] %>%
-    .[, trimester := lubridate::round_date(date, unit='3 months')] %>%
-    .[!duplicated(trimester),] %>%
-    .[order(trimester), end_date := .SD[.I+1, trimester]-1]
-  
-  p_ymin <- q_dt[, min(c(min(Qobs,na.rm=T), 
-                       min(fit_l99, na.rm=T)))]
-  
-  p_fit <- ggplot(data=q_dt) +
-    geom_rect(data=p_rect_dat,
-              aes(xmin=trimester, xmax=end_date, 
-                  ymin=p_ymin, ymax=Inf, 
-                  fill = PDSI), alpha=1/2) +
-    geom_ribbon(aes(x=date, ymin=fit_l99, ymax=fit_u99), color='darkgrey') + 
-    geom_line(aes(x=date, y=Qobs), size=1) +
-    #geom_line(aes(x=date, y=fit),  color='orange') +
-    geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
-    scale_fill_distiller(name='PDSI', palette='RdBu', direction=1) +
-    scale_y_sqrt() + 
-    theme_classic()
-  
-  q_dt[, grp_int := interaction(format(date, '%Y%m'), 
-                                as.numeric(factor(PDSI, exclude = 999)))]
-  
-  p_fit_seasonal <-  ggplot(q_dt[!is.na(Qobs)], 
-                            aes(x=as.numeric(jday), y=Qobs)) + 
-    # geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, 
-    #                 fill=PDSI, group=grp_int), 
-    #             alpha=1/5) + 
-    #geom_point(aes(color=year), alpha=1/4) +
-    geom_line(aes(color=PDSI, group=grp_int), linewidth=1) +
-    #geom_line(aes(x=jday, y=get(nearg_cols[[1]]), group=year), color='blue') +
-    scale_color_distiller(palette='Spectral', direction=1) +
-    scale_fill_distiller(palette='Spectral', direction=1) +
-    ggnewscale::new_scale_color() +
-    geom_point(data=all_flags, aes(color=variable), alpha=1/2, size=2) +
-    scale_color_brewer(palette='Dark2') +
-    scale_y_sqrt() +
-    theme_classic()
-  
-  p_fit_forplotly <- ggplot(data=q_dt) +
-    geom_point(aes(x=date, y=Qobs), alpha=1/3) +
-    geom_line(aes(x=date, y=Qobs), linewidth=1.2) +
-    #geom_line(aes(x=date, y=fit),  color='orange') +
-    geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
-    scale_x_date(date_breaks="1 year") +
-    scale_y_sqrt() + 
-    theme_classic()
-  
+  if (plot_fit) {
+    #Format outliers for plotting
+    all_flags <- melt(
+      in_data[(stl_outlier==1)|(arima_outlier_99==1)|(auto_flag>0)|smooth_flag
+              |(arima_outlier_rolldiff==1),],
+      id.vars=c('date', 'jday','year', 'Qobs'),
+      measure.vars = c('stl_outlier', 'arima_outlier_rolldiff',
+                       'auto_flag', 'smooth_flag'))  %>%
+      .[!(value %in% c(NA, 0)),]
+    
+    p_rect_dat <- in_data[!is.na(PDSI), .(date, PDSI)] %>%
+      .[, trimester := lubridate::round_date(date, unit='3 months')] %>%
+      .[!duplicated(trimester),] %>%
+      .[order(trimester), end_date := .SD[.I+1, trimester]-1]
+    
+    p_ymin <- in_data[, min(c(min(Qobs,na.rm=T), 
+                              min(fit_l99, na.rm=T)))]
+    
+    p_fit <- ggplot(data=in_data) +
+      geom_rect(data=p_rect_dat,
+                aes(xmin=trimester, xmax=end_date, 
+                    ymin=p_ymin, ymax=Inf, 
+                    fill = PDSI), alpha=1/2) +
+      geom_ribbon(aes(x=date, ymin=fit_l99, ymax=fit_u99), color='darkgrey') + 
+      geom_line(aes(x=date, y=Qobs), size=1) +
+      #geom_line(aes(x=date, y=fit),  color='orange') +
+      geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
+      scale_fill_distiller(name='PDSI', palette='RdBu', direction=1) +
+      scale_y_sqrt() + 
+      theme_classic()
+    
+    in_data[, grp_int := interaction(format(date, '%Y%m'), 
+                                     as.numeric(factor(PDSI, exclude = 999)))]
+    
+    p_seasonal <-  ggplot(in_data[!is.na(Qobs)], 
+                              aes(x=as.numeric(jday), y=Qobs)) + 
+      # geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, 
+      #                 fill=PDSI, group=grp_int), 
+      #             alpha=1/5) + 
+      #geom_point(aes(color=year), alpha=1/4) +
+      geom_line(aes(color=PDSI, group=grp_int), linewidth=1) +
+      #geom_line(aes(x=jday, y=get(in_nearg_cols[[1]]), group=year), color='blue') +
+      scale_color_distiller(palette='Spectral', direction=1) +
+      scale_fill_distiller(palette='Spectral', direction=1) +
+      ggnewscale::new_scale_color() +
+      geom_point(data=all_flags, aes(color=variable), alpha=1/2, size=2) +
+      scale_color_brewer(palette='Dark2') +
+      scale_y_sqrt() +
+      theme_classic()
+    
+    p_fit_forplotly <- ggplot(data=in_data) +
+      geom_point(aes(x=date, y=Qobs), alpha=1/3) +
+      geom_line(aes(x=date, y=Qobs), linewidth=1.2) +
+      #geom_line(aes(x=date, y=fit),  color='orange') +
+      geom_point(data=all_flags, aes(x=date, y=Qobs, color=variable)) +
+      scale_x_date(date_breaks="1 year") +
+      scale_y_sqrt() + 
+      theme_classic()
+  } else {
+    p_fit = NULL
+    p_seasonal = NULL
+    p_fit_forplotly = NULL
+  }
+
   #return statement ------------------------------------------------------------
   return(list(
-    outliers_dt = q_dt[(stl_outlier==1)|(arima_outlier_95==1)
-                       |(arima_outlier_99==1)|(auto_flag>0)|(smooth_flag),
-                       .(date, q_rleid, auto_flag, stl_outlier,smooth_flag,
-                         arima_outlier_95, arima_outlier_99)], 
+    outliers_dt = in_data[,
+                       .(grdc_no, date, jday, Qobs, year, integervalue, 
+                         missingdays, dor_interp, pop_interp, built_interp,
+                         crop_interp, tmax, PDSI, Qmod, river_ice_fraction,
+                         jdaymean, jdaysd, all_flags)], 
+    arima_model = qARIMA$mod,
     p_fit = p_fit,
-    p_seasonal = p_fit_seasonal,
-    p_fit_forplotly = p_fit_forplotly,
-    arima_model = qARIMA$mod
+    p_seasonal = p_seasonal,
+    p_fit_forplotly = p_fit_forplotly
   ))
 }
 
+
+
+
+#------ manually QC data -------------------------------------------------------
+
+
+
+# dat_qs_list <- tar_read(data_for_qc)[potential_npr==T & integer_perc < 0.80, qs_path]
+# as.data.table(qread(dat_qs_list[[1]]) )
+# 
+# outlier_qs_list <- file.path(temp_qs_dir,
+#                              gsub('data_for_qc_', 'q_outliers_flags_',
+#                                   basename(dat_qs_list)))
+# 
+# for (i in seq(1, 20)) {
+#   in_dat_path <- dat_qs_list[[i]]
+#   in_qs <- file.path(temp_qs_dir,
+#                      gsub('data_for_qc_',
+#                           'q_outliers_flags_',
+#                           basename(in_dat_path))
+#   )
+#   in_dat <- qread(in_dat_path)
+#   integer_perc <- in_dat[!is.na(Qobs),
+#                          sum(fifelse(Qobs == round(Qobs), 1, 0))/.N]
+#   print(integer_perc)
+# }
+# 
+# in_dat_path <- dat_qs_list[[5]]
+# in_qs <- file.path(temp_qs_dir,
+#                    gsub('data_for_qc_',
+#                         'q_outliers_flags_',
+#                         basename(in_dat_path))
+# )
+# in_dat <- qread(in_dat_path)$q_dt_attri
+# in_outliers_qs <- qread(in_qs)
+# in_outliers <- in_outliers_qs$outliers_dt
+
+# in_outliers_qs$p_fit_forplotly$data
+
+
+
+################### EXTRA STUFF ################################################
 # ggplot(q_dt, aes(x=jday, y=Qobs, group=year)) + 
 #   geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, fill=year), alpha=1/5) + 
 #   #geom_point(aes(color=year), alpha=1/4) +
@@ -1248,37 +1315,4 @@ detect_outliers_ts <- function(in_data, arima_split=F) {
 # plot(forecast(check, h=365.25))
 #check<- features(q_ts,Qobs, feature_set(pkgs = "feasts")) #Get all features from feasts
 #check <- tsoutliers(ts(log(q_ts$Qobs+0.01), 365.25)) #look for outliers
-
-
-#------ manually QC data -------------------------------------------------------
-# dat_qs_list <- tar_read(data_for_qc)[potential_npr==T & integer_perc < 0.80, qs_path]
-# outlier_qs_list <- file.path(temp_qs_dir,
-#                              gsub('data_for_qc_', 'q_outliers_flags_',
-#                                   basename(dat_qs_list)))
-# 
-# for (i in seq(1, 20)) {
-#   in_dat_path <- dat_qs_list[[i]]
-#   in_qs <- file.path(temp_qs_dir,
-#                      gsub('data_for_qc_',
-#                           'q_outliers_flags_',
-#                           basename(in_dat_path))
-#   )
-#   in_dat <- qread(in_dat_path)$q_dt_attri
-#   integer_perc <- in_dat[!is.na(Qobs),
-#                          sum(fifelse(Qobs == round(Qobs), 1, 0))/.N]
-#   print(integer_perc)
-# }
-# 
-# in_dat_path <- dat_qs_list[[5]]
-# in_qs <- file.path(temp_qs_dir,
-#                    gsub('data_for_qc_',
-#                         'q_outliers_flags_',
-#                         basename(in_dat_path))
-# )
-# in_dat <- qread(in_dat_path)$q_dt_attri
-# in_outliers_qs <- qread(in_qs)
-# in_outliers <- in_outliers_qs$outliers_dt
-# 
-# in_outliers_qs$p_fit_forplotly$data
-
 

@@ -16,7 +16,7 @@ tar_option_set(format = "qs",
 
 #--- Parameters ---------------------------------------------------------------
 min_yrs = 20
-overwrite=T
+overwrite=F
 
 ############################# Define targets plan ##############################
 list(
@@ -182,35 +182,51 @@ list(
                    qsave(out_list$q_dt_attri, out_qs)
                  }
                  
-                 return(data.table(qs_path = out_qs,
-                                   potential_npr = out_list$potential_npr,
-                                   integer_perc = out_list$integer_perc,
-                                   near_gcols_sel = out_list$near_gcols_sel)
+                 return(data.table(
+                   grdc_no = in_no,
+                   qs_path = out_qs,
+                   potential_npr = out_list$potential_npr,
+                   integer_perc = out_list$integer_perc,
+                   near_gcols_sel = out_list$near_gcols_sel)
                  )
                }
-               ) %>% rbindlist
+               ) %>% rbindlist(., fill=T)
   ),
   
   tar_target(q_outliers_flags,
-             future_lapply(
-               data_for_qc[potential_npr==T & integer_perc<0.95, qs_path], 
-               function(in_path) {
-                 print(in_path)
+             lapply(
+               data_for_qc[potential_npr==T & integer_perc<0.95, grdc_no], 
+               function(in_no) {
+                 print(in_no)
+                 row <- data_for_qc[grdc_no == in_no,]
+                 qs_path <- row$qs_path[[1]]
+                 nearg_cols_sel <- row$near_gcols_sel[[1]]
+                 
                  out_qs <- file.path(temp_qs_dir, 
                                      gsub('data_for_qc_', 
                                           'q_outliers_flags_',
-                                          basename(in_path))
+                                          basename(qs_path))
                                      )
                  
-            
+                 overwrite=T
                  if (!file.exists(out_qs) | overwrite) {
-                   out_flags <- detect_outliers_ts(in_data=qread(in_path))
-                   qsave(out_flags, out_qs)
+                   out_flags <- detect_outliers_ts(
+                     in_data=qread(qs_path),
+                     in_nearg_cols=nearg_cols_sel)
+                   
+                   qsave(out_flags$outliers_dt, out_qs)
                  }
                  
-                 return(out_qs)
+                 return(data.table(
+                   grdc_no = in_no,
+                   out_qs = out_qs,
+                   arima_model = out_flags$arima_model,
+                   p_fit = out_flags$p_fit,
+                   p_seasonal = out_flags$p_fit_seasonal,
+                   p_fit_forplotly = out_flags$p_fit_forplotly)
+                 )
                }
-             )
+             ) %>% rbindlist(., fill=T)
   )
   # ,
 # 

@@ -208,15 +208,14 @@ list(
                                           basename(qs_path))
                                      )
                  
-                 overwrite=T
+                 overwrite=F
                  if (!file.exists(out_qs) | overwrite) {
                    out_flags <- detect_outliers_ts(
                      in_data=qread(qs_path),
                      in_nearg_cols=nearg_cols_sel)
                    
                    qsave(out_flags$outliers_dt, out_qs)
-                 }
-                 
+
                  return(data.table(
                    grdc_no = in_no,
                    out_qs = out_qs,
@@ -225,6 +224,7 @@ list(
                    p_seasonal = out_flags$p_fit_seasonal,
                    p_fit_forplotly = out_flags$p_fit_forplotly)
                  )
+                 }                 
                }
              ) %>% rbindlist(., fill=T)
   )

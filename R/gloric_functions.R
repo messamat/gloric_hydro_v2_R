@@ -947,7 +947,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     #Find best ARIMA model
     bestfit_nearg <- list(aicc=Inf)
     break_loop <- F
-    for(i in 1:10) #Select the number of Fourier series by minimizing AIC
+    for(i in 1:10) #Select the number of Fourier series by minimizing AICc
     {
       tryCatch(
         fit <- auto.arima(q_ts, 
@@ -1029,13 +1029,18 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
   
   #Get one-step ahead forecast with confidence interval
   sigma2 <- bestfit$sigma2
-  q_dt$fit <- fitted(bestfit, h=1)
+  q_dt$fit <- as.numeric(fitted(bestfit, h=1))
   q_dt$fit_l95 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*1.96, lambda=obs_bclambda)-0.01
   q_dt$fit_u95 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*1.96, lambda=obs_bclambda)-0.01
   q_dt$fit_l99 <- InvBoxCox(q_dt$fit - sqrt(sigma2)*2.68, lambda=obs_bclambda)-0.01
   q_dt$fit_u99 <- InvBoxCox(q_dt$fit + sqrt(sigma2)*2.68, lambda=obs_bclambda)-0.01
   q_dt$fit <- InvBoxCox(q_dt$fit, lambda=obs_bclambda)-0.01
   q_dt$obsfitdiff <- q_dt[, InvBoxCox(get(in_qcol), lambda=obs_bclambda)] - q_dt$fit
+  
+  #Make sure the predictions are bounded to 0 (because of the 0.01)
+  q_dt[fit<0, fit:=0]
+  q_dt[fit_l95<0, fit_l95:=0]
+  q_dt[fit_l99<0, fit_l99:=0]
   
   return(list(
     fit_dt=q_dt[, .(date, fit, fit_l95, fit_u95, fit_l99, fit_u99, obsfitdiff)],
@@ -1109,13 +1114,12 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
     return(dt_processed)
   }) %>% rbindlist
 
-  
   in_data <- merge(in_data, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
     .[order(date),]
   in_data[, arima_outlier_rolldiff := fifelse(
     ((Qobs < fit_l99) & (obsfitdiff<0) & (obsfitdiff<(obsfitdiff_roll_l*2))) | 
       ((Qobs > fit_u99) & (obsfitdiff>0) & (obsfitdiff>(obsfitdiff_roll_u*2))), 1, 0)]
-
+  
   #Detect outliers through periodic STL decomposition --------------------------
   in_data_sub <- in_data[missingdays < 90,]
   if (nrow(in_data_sub) > 1) {

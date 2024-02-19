@@ -776,7 +776,7 @@ prepare_QC_data_util <- function(in_grdc_no,
   #Get basic metadata and discharge observations
   filepath <- in_gmeta_formatted[grdc_no == in_grdc_no, filename]
   q_dt <- readformatGRDC(filepath)
-
+  
   #Merge all data
   q_dt_attri <- merge(q_dt, #merge anthropo data, keeping only reference years
                       gauges_anthropo[, -c('n_years'), with=F],
@@ -826,7 +826,7 @@ prepare_QC_data_util <- function(in_grdc_no,
     #Merge them to the main table
     q_dt_attri <-  q_dt_attri %>% 
       merge(near_gaugesq, by='date', all.x=T) %>%
-    .[, date := as.Date(date)]
+      .[, date := as.Date(date)]
     
     #Sort near gauges based on overlap and similarity in median Q----------
     nearg_cols <- grep('Qobs_(down|up)stream_travel_.*',
@@ -852,7 +852,7 @@ prepare_QC_data_util <- function(in_grdc_no,
       } else {
         max_cc <-NA
       }
-
+      
       
       return(data.table(
         col=gcol,
@@ -897,7 +897,7 @@ LBtest_util <- function(in_mod, lag) {
   moddf <-  sum(arimaorder(in_mod)[c("p","q","P","Q")], na.rm = TRUE)
   modres <- residuals(in_mod)
   freq <- frequency(residuals)
-
+  
   if (missing(lag)) {
     lag <- ifelse(freq > 1, 2 * freq, 10)
     lag <- min(lag, round(length(modres)/5))
@@ -909,19 +909,19 @@ LBtest_util <- function(in_mod, lag) {
   LBtest$method <- "Ljung-Box test"
   LBtest$data.name <- "Residuals"
   names(LBtest$statistic) <- "Q*"
-
-    return(LBtest)
+  
+  return(LBtest)
 }
 
 
-run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
+run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda, max_K) {
   setDT(in_q_dt)
   q_dt <- copy(in_q_dt)
   q_ts <- ts(q_dt[, get(in_qcol)], frequency=365.25)
   
   #Identify outliers with ARIMAX -----------------------------------------------
   #If there is a nearby gauge
-   # by default, set this to FALSE to not throw an error if there is no nearby gauge
+  # by default, set this to FALSE to not throw an error if there is no nearby gauge
   if ((length(nearg_cols) >= 1) & !any(is.na(nearg_cols))) {
     nearg <- T
     test_without_nearg <- F
@@ -947,7 +947,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     #Find best ARIMA model
     bestfit_nearg <- list(aicc=Inf)
     break_loop <- F
-    for(i in 1:10) #Select the number of Fourier series by minimizing AICc
+    for(i in 1:max_K) #Select the number of Fourier series by minimizing AICc
     {
       tryCatch(
         fit <- auto.arima(q_ts, 
@@ -980,7 +980,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
     #Find best ARIMA model (without other gauge)
     bestfit_nonearg <- list(aicc=Inf)
     break_loop <- F
-    for(i in 1:10) #Select the number of Fourier series by minimizing AIC
+    for(i in 1:max_K) #Select the number of Fourier series by minimizing AIC
     {
       tryCatch(
         fit <- auto.arima(q_ts, 
@@ -1000,7 +1000,7 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
         bestfit_nonearg <- fit #Keep model with lowest AIC
       }else {break};
     }
-
+    
     restests_nonearg <- LBtest_util(in_mod=bestfit_nonearg)
   }
   
@@ -1064,10 +1064,15 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda) {
 detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F) {
   #Remove negative values
   ts_cols <- c('date', 'Qobs', 'year', 'missingdays','PDSI')
-  in_data[Qobs < 0, Qobs := NA]  #[, c(ts_cols, in_nearg_cols), with=F] %>%
+  in_data[Qobs < 0, Qobs := NA]
+  first_nona_ix <- in_data[,min(which(!is.na(Qobs)))]
+  if (first_nona_ix > 1) {
+    in_data <- in_data[!seq(1,first_nona_ix),]
+  }
   
   #Transform discharge and create time series object
-  obs_bclambda  <- 0.05  #BoxCox.lambda(ts(q_dt[, 'Qobs', with=F], frequency=365.25)) #Determine BoxCox transformation lambda
+  obs_bclambda  <- BoxCox.lambda(ts(in_data$Qobs+0.01, 
+                                    frequency=365.25)) #Determine BoxCox transformation lambda
   in_data[, Qobs_trans := BoxCox(Qobs+0.01, lambda=obs_bclambda)]
   
   if (length(in_nearg_cols) > 1) {
@@ -1076,20 +1081,11 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
   
   #Run ARIMA model to detect potential outliers---------------------------------
   #start <- Sys.time()
-  if ((nrow(in_data)>(365.25*80)) & arima_split) {
-    n_splits <- ceiling(nrow(in_data)/(365.25*80))
-    dt_split <- split(in_data, rep(1:n_splits, length.out=nrow(in_data), 
-                                each = ceiling(nrow(in_data)/n_splits)
-                                )
-                      )
-    qARIMA <- lapply(dt_split, function(in_dt) {
-      run_qARIMA(in_q_dt=in_dt, in_qcol='Qobs_trans', 
-                 nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda)
-    })
-  } else {
-    qARIMA <- run_qARIMA(in_q_dt=in_data, in_qcol='Qobs_trans', 
-                         nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda)
-  }
+  max_K <- ifelse((nrow(in_data)<(365.25*80)), 10, 3) 
+  qARIMA <- run_qARIMA(in_q_dt=in_data, in_qcol='Qobs_trans', 
+                       nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda,
+                       max_K=max_K)
+  #}
   #print(Sys.time()-start)
   #ARIMA is good at detecting sudden peaks, but classifies them all as peaks, 
   #STL decomposition-based outlier detecting seems better at detecting 
@@ -1099,7 +1095,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
   in_data <- merge(in_data, qARIMA$fit_dt, by='date', all.x=T)
   in_data[, date := as.Date(date)] %>%
     .[, jday := as.numeric(format(date, '%j'))]
-
+  
   #Find differences from forecast outside of the julian day 90% interval
   obsfitdiff_roll_dt <- lapply(seq(366), function(i) {
     dt_processed <- in_data[
@@ -1113,7 +1109,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
     ]
     return(dt_processed)
   }) %>% rbindlist
-
+  
   in_data <- merge(in_data, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
     .[order(date),]
   in_data[, arima_outlier_rolldiff := fifelse(
@@ -1129,7 +1125,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
   } else {
     in_data[, stl_outlier := 0]
   }
-
+  
   #Detect potential outliers through hard rules --------------------------------
   flagGRDCoutliers(in_data)
   setnames(in_data, 'flag_mathis', 'auto_flag')
@@ -1141,7 +1137,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
     .[, Qdiff2_rollcv := frollapply(Qobs_diff2, n=10, sd)/abs(frollmean(Qobs_diff2, n=10))] 
   in_data[, Qdiff2_rollcv_jdayq90 := quantile(Qdiff2_rollcv, 1/10, na.rm=T), by=jday]
   in_data[, smooth_flag := (.N>7)&(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90), 
-       by=rleid(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90)]
+          by=rleid(Qdiff2_rollcv< Qdiff2_rollcv_jdayq90)]
   
   # ggplotly(ggplot(in_data, aes(x=date, y=Qobs_trans)) +
   #   geom_line() +
@@ -1198,7 +1194,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
                                      as.numeric(factor(PDSI, exclude = 999)))]
     
     p_seasonal <-  ggplot(in_data[!is.na(Qobs)], 
-                              aes(x=as.numeric(jday), y=Qobs)) + 
+                          aes(x=as.numeric(jday), y=Qobs)) + 
       # geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, 
       #                 fill=PDSI, group=grp_int), 
       #             alpha=1/5) + 
@@ -1226,14 +1222,14 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
     p_seasonal = NULL
     p_fit_forplotly = NULL
   }
-
+  
   #return statement ------------------------------------------------------------
   return(list(
     outliers_dt = in_data[,
-                       .(grdc_no, date, jday, Qobs, year, integervalue, 
-                         missingdays, dor_interp, pop_interp, built_interp,
-                         crop_interp, tmax, PDSI, Qmod, river_ice_fraction,
-                         jdaymean, jdaysd, all_flags)], 
+                          .(grdc_no, date, jday, Qobs, year, integervalue, 
+                            missingdays, dor_interp, pop_interp, built_interp,
+                            crop_interp, tmax, PDSI, Qmod, river_ice_fraction,
+                            jdaymean, jdaysd, all_flags)], 
     arima_model = qARIMA$mod,
     p_fit = p_fit,
     p_seasonal = p_seasonal,
@@ -1242,9 +1238,96 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
 }
 
 
+#------ compute metastatistics -------------------------------------------------
+# in_outliers_flags <- tar_read(q_outliers_flags)
+# in_outlier_row <- unique(in_outliers_flags, by=c('grdc_no'))[50,]
+
+compute_metastatistics <- function(in_outliers_path, in_no) {
+  in_dt_edit_path <- paste0(
+    tools::file_path_sans_ext(in_outliers_path),
+    '_edit.csv')
+  in_dt_clean <- fread(in_dt_edit_path, select=c('date', 'Qobs', 'year'))
+  
+  if (in_dt_clean[, sum(!is.na(Qobs) & (Qobs > 0))] > 1) {
+    #Convert negative values to NA
+    in_dt_clean[Qobs < 0, Qobs := NA]
+    
+    #For interpolation, get rid of leading NAs
+    first_nona_ix <- in_dt_clean[,min(which(!is.na(Qobs)))]-1
+    if (first_nona_ix > 1) {
+      in_dt_clean<- in_dt_clean[!seq(1,first_nona_ix),]
+    }
+    
+    #Interpolate with robust STL decomposition on pre-transformed data
+    obs_bclambda  <- BoxCox.lambda(ts(in_dt_clean$Qobs+0.01, 
+                                      frequency=365.25)) #Determine BoxCox transformation lambda
+    in_dt_clean[, Qobs_trans := BoxCox(Qobs+0.01, lambda=obs_bclambda)]
+    
+    in_dt_clean[,  Qobs_interp := InvBoxCox(
+      forecast::na.interp(ts(Qobs_trans, 
+                             frequency=365.25)),
+      lambda = obs_bclambda)-0.01]
+    in_dt_clean[Qobs_interp<0, Qobs_interp:=0]
+    
+    #Compute length of each interpolated period
+    in_dt_clean[, NAperiod := rleid(is.na(Qobs))] %>%
+      .[is.na(Qobs), NAperiod_n := .N, by=NAperiod]
+    
+    # ggplot(in_dt_clean, aes(x=date, y=Qobs_interp, color=NAperiod_n, group=NAperiod)) +
+    #   geom_line(color='grey') +
+    #   geom_line(data=in_dt_clean[is.na(Qobs)], size=1.1) +
+    #   theme_bw()
+    
+    #Compute number of missing days depending on the maximum interpolated gap
+    #as well as the number of "no-flow" records depending on flow threshold
+    metastats_dt <- in_dt_clean[, list(
+      missingdays_edit = sum(is.na(Qobs)),
+      missingdays_edit_interp5 = .SD[is.na(Qobs) & NAperiod_n > 5, .N],
+      missingdays_edit_interp7 = .SD[is.na(Qobs) & NAperiod_n > 7, .N],
+      missingdays_edit_interp10 = .SD[is.na(Qobs) & NAperiod_n > 10, .N],
+      ndays_Qu5 = sum(Qobs < 0.005, na.rm=T),
+      ndays_Que1 = sum(Qobs <= 0.001, na.rm=T),
+      ndays_zeroflow = sum(Qobs==0, na.rm=T)
+    ), by=year] %>%
+      .[,  `:=`(
+        grdc_no = in_no,
+        edited_data_path = in_dt_edit_path,
+        Q50 = in_dt_clean[
+          year %in% .SD[missingdays_edit_interp10 < 15,year],
+          quantile(Qobs_interp, 0.5)]
+      )] 
+    
+    return(metastats_dt)
+  }
+}
+
+#------ compute metastatistics wrapper -----------------------------------------
+#in_outliers_output_dt <- tar_read(q_outliers_flags)
+
+compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
+  u_in_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))
+
+  out_dt <- lapply(u_in_dt$grdc_no,
+                function(in_no) {
+                  #print(in_no)
+                  meta_dt <- compute_metastatistics(
+                    in_outliers_path=u_in_dt[grdc_no==in_no,out_qs],
+                    in_no=in_no)
+                  return(meta_dt)
+                }
+  ) %>% rbindlist
+  
+  return(out_dt)
+}
+  
+#---------------- plot_metastats -----------------------------------------------
+#in_metastats_dt <- tar_read(metastats_dt)
 
 
-#------ manually QC data -------------------------------------------------------
+
+
+
+
 
 
 

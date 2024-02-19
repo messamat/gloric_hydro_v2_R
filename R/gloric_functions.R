@@ -1238,40 +1238,62 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
 }
 
 
-#------ compute metastatistics -------------------------------------------------
-# in_outliers_flags <- tar_read(q_outliers_flags)
-# in_outlier_row <- unique(in_outliers_flags, by=c('grdc_no'))[50,]
+#------ na_interp_dt_custom ----------------------------------------------------
+na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
+  #Convert negative values to NA
+  in_dt[get(in_var) < in_floor, (in_var) := NA]
+  
+  #For interpolation, get rid of leading NAs
+  first_nona_ix <- in_dt[,min(which(!is.na(get(in_var))))]-1
+  
+  trans_fn <- paste0(in_var, '_trans')
+  interp_fn <- paste0(in_var, '_interp')
+  
+  #Interpolate with robust STL decomposition on pre-transformed data
+  obs_bclambda  <- BoxCox.lambda(ts(in_dt[!seq(0,first_nona_ix),][[in_var]]+0.01, 
+                                    frequency=in_freq)) #Determine BoxCox transformation lambda
+  in_dt[, (trans_fn) := BoxCox(get(in_var)+0.01, lambda=obs_bclambda)]
+  
+  in_dt[!seq(0,first_nona_ix),  
+        (interp_fn) := as.vector(
+          InvBoxCox(
+            forecast::na.interp(ts(get(trans_fn), 
+                                   frequency=in_freq)
+            ),
+            lambda = obs_bclambda)-0.01
+        )]
+  in_dt[get(interp_fn)<in_floor, (interp_fn):=in_floor]
+  
+  #Compute length of each interpolated period
+  in_dt[, NAperiod := rleid(is.na(get(in_var)))] %>%
+    .[is.na(get(in_var)), NAperiod_n := .N, by=NAperiod]
+  in_dt[, NAperiod := NULL]
+  
+}
+# 
+in_outliers_output_dt <- tar_read(q_outliers_flags)
+lapply(unique(in_outliers_output_dt, by=c('grdc_no'))[,grdc_no], function(in_no) {
+  print(in_no)
+  in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
+  n_freq=365.25
+  in_floor=0
+  compute_metastatistics(in_outliers_path, in_no)
+})
+#------ compute metastatistics_util --------------------------------------------
+# in_no <- unique(in_outliers_output_dt, by=c('grdc_no'))[1,grdc_no]
+# in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
+# n_freq=365.25
+# in_floor=0
 
-compute_metastatistics <- function(in_outliers_path, in_no) {
+compute_metastatistics_util <- function(in_outliers_path, in_no) {
   in_dt_edit_path <- paste0(
     tools::file_path_sans_ext(in_outliers_path),
     '_edit.csv')
   in_dt_clean <- fread(in_dt_edit_path, select=c('date', 'Qobs', 'year'))
   
   if (in_dt_clean[, sum(!is.na(Qobs) & (Qobs > 0))] > 1) {
-    #Convert negative values to NA
-    in_dt_clean[Qobs < 0, Qobs := NA]
-    
-    #For interpolation, get rid of leading NAs
-    first_nona_ix <- in_dt_clean[,min(which(!is.na(Qobs)))]-1
-    if (first_nona_ix > 1) {
-      in_dt_clean<- in_dt_clean[!seq(1,first_nona_ix),]
-    }
-    
-    #Interpolate with robust STL decomposition on pre-transformed data
-    obs_bclambda  <- BoxCox.lambda(ts(in_dt_clean$Qobs+0.01, 
-                                      frequency=365.25)) #Determine BoxCox transformation lambda
-    in_dt_clean[, Qobs_trans := BoxCox(Qobs+0.01, lambda=obs_bclambda)]
-    
-    in_dt_clean[,  Qobs_interp := InvBoxCox(
-      forecast::na.interp(ts(Qobs_trans, 
-                             frequency=365.25)),
-      lambda = obs_bclambda)-0.01]
-    in_dt_clean[Qobs_interp<0, Qobs_interp:=0]
-    
-    #Compute length of each interpolated period
-    in_dt_clean[, NAperiod := rleid(is.na(Qobs))] %>%
-      .[is.na(Qobs), NAperiod_n := .N, by=NAperiod]
+    na_interp_dt_custom(in_dt=in_dt_clean,
+                        in_var='Qobs')
     
     # ggplot(in_dt_clean, aes(x=date, y=Qobs_interp, color=NAperiod_n, group=NAperiod)) +
     #   geom_line(color='grey') +
@@ -1294,9 +1316,9 @@ compute_metastatistics <- function(in_outliers_path, in_no) {
         edited_data_path = in_dt_edit_path,
         Q50 = in_dt_clean[
           year %in% .SD[missingdays_edit_interp10 < 15,year],
-          quantile(Qobs_interp, 0.5)]
+          quantile(Qobs_interp, 0.5, na.rm=T)]
       )] 
-    
+
     return(metastats_dt)
   }
 }
@@ -1306,7 +1328,7 @@ compute_metastatistics <- function(in_outliers_path, in_no) {
 
 compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
     out_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))[,
-      compute_metastatistics(
+      compute_metastatistics_util(
         in_outliers_path=out_qs,
         in_no=grdc_no),
       by=grdc_no
@@ -1314,31 +1336,39 @@ compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
   return(out_dt)
 }
   
-#---------------- plot_metastats -----------------------------------------------
+#------ plot_metastats -----------------------------------------------
 #in_metastats_dt <- tar_read(metastats_dt)
+
 analyze_metastats <- function(in_metastats_dt) {
   #Check which ones are non-perennial (npr) 
   # have at least one day < 5L/s if Q50>1 or <= 1L/s if Q50<1
   in_metastats_dt[, unique(grdc_no)]
   
-  metastats_npr <- in_metastats_dt[, list(npr = fifelse(
-    Q50>1, 
-    max(ndays_Qu5)>0, 
-    max(ndays_Que1)>0)),
-    by=grdc_no] %>%
+  metastats_npr <- in_metastats_dt[, list(
+    npr=max(ndays_Que1)>0), by='grdc_no'] %>%
     .[npr==T, unique(grdc_no)]
+  
+   # metastats_npr <- in_metastats_dt[, list(npr = fifelse(
+   #  Q50>1, 
+   #  max(ndays_Qu5)>0, 
+   #  max(ndays_Que1)>0)),
+   #  by=grdc_no] %>%
+   #  .[npr==T, unique(grdc_no)]
   
   metastats_pformat <- melt(
     in_metastats_dt[grdc_no %in% metastats_npr,],
     id.vars=c('grdc_no', 'year'),
     measure.vars = grep('missingdays_', names(in_metastats_dt), value=T)
   ) %>%
-    .[, variable := gsub('missingdays_', '', variable)]
+    .[, variable := as.numeric(gsub('missingdays_edit(_interp)*', '', 
+                                    variable))] %>%
+    setnames('variable', 'max_interp') %>%
+    .[is.na(max_interp), max_interp:=0]
   
   metastats_nyears <- lapply(seq(0,30, 5), function(max_miss) {
     out_stats <- metastats_pformat[value<=max_miss, 
                             list(nyears=.N),
-                            by=c('grdc_no', 'variable')]
+                            by=c('grdc_no', 'max_interp')]
     out_stats[, max_miss := max_miss]
     return(out_stats)
   }) %>% rbindlist
@@ -1346,21 +1376,15 @@ analyze_metastats <- function(in_metastats_dt) {
   metastats_ngauges <- lapply(seq(0,30, 5), function(min_nyears) {
     out_stats <- metastats_nyears[nyears>=min_nyears, 
                            list(ngauges=.N),
-                           by=c('max_miss','variable')]
+                           by=c('max_miss','max_interp')]
     out_stats[, min_nyears := min_nyears]
     return(out_stats)
   }) %>% rbindlist
-  
-  metastats_ngauges[, colmix := rgb(
-    red = max_miss/max(max_miss,na.rm=T), 
-    green=0, 
-    blue=as.numeric(as.factor(variable))/length(unique(variable)))]
-  
-  
+
   plot_ngauges <- ggplot(metastats_ngauges, 
                          aes(x=min_nyears, y=max_miss, color=ngauges)) +
     geom_text(aes(label=ngauges)) +
-    facet_wrap(~variable) +
+    facet_wrap(~max_interp) +
     scale_color_distiller(palette='RdPu') +
     theme_bw()
   
@@ -1369,12 +1393,12 @@ analyze_metastats <- function(in_metastats_dt) {
   #        )+
   #   geom_line() +
   #   scale_color_distiller(palette='PuBu') +
-  #   facet_wrap(~variable) +
+  #   facet_wrap(~max_interp) +
   #   theme_bw()
   
   metastats_meanyrs <- metastats_nyears[nyears>15, 
                                         .SD[, mean(nyears)],
-                                        by=c('max_miss', 'variable')]
+                                        by=c('max_miss', 'max_interp')]
   return(list(
     plot_ngauges = plot_ngauges,
     metastats_meanyrs = metastats_meanyrs,
@@ -1382,8 +1406,63 @@ analyze_metastats <- function(in_metastats_dt) {
   ))
 }
 
-#---------------- compute_hydrostats_utils -------------------------------------
-compute_hydrostats_util <- function(metastats_analyzed)
+#------ compute_hydrostats_utils -------------------------------------
+in_metastats_dt <- tar_read(metastats_dt)
+in_metastats_analyzed <- tar_read(metastats_analyzed)
+
+max_interp_sel = 10
+max_miss_sel = 0
+min_nyears = 15
+
+interp_fn <- paste0('missingdays_edit',
+                    fifelse(max_interp_sel >0,
+                            paste0('_interp', max_interp_sel),
+                            '')
+)
+
+gauges_sel_no <- in_metastats_analyzed$metastats_nyears[
+  max_interp==max_interp_sel & max_miss==max_miss_sel & nyears>=min_nyears,
+  grdc_no]
+
+in_no <- gauges_sel_no[1]
+#For given gauge, get years with less than the maximum number of missing days
+#given maximum interpolation period
+meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
+                                & get(interp_fn)<=max_miss_sel,]
+
+#Read data, keeping only years with number of missing days under threshold
+#subset columns for speed
+q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
+  .[year %in% meta_sub_yrs$year, .(grdc_no, date, jday, Qobs, year, tmax, PDSI)]
+
+#Interpolate discharge, keeping only interpolation periods under threshold
+na_interp_dt_custom(in_dt=q_dt,
+                    in_var='Qobs')
+q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
+
+#Prepare data for computing statistics
+q_dt[, noflow_period := rleid(Qobs_interp <= 0.001)] %>%
+  .[Qobs_interp > 0.001, noflow_period := NA] %>%
+  .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period]
+
+#Compute statistics
+q_stats <- q_dt[, list(
+  f0 = sum(Qobs_interp <= 0.001)/.N,
+  meanD = mean(.SD[!is.na(noflow_period) & !duplicated(noflow_period),
+                   noflow_period_dur]),
+  medianD = median(.SD[!is.na(noflow_period) & !duplicated(noflow_period),
+                     noflow_period_dur]),
+  sdN = sd(.SD[!is.na(noflow_period) & !duplicated(noflow_period),
+               noflow_period_dur]),
+  meanN = .SD[!is.na(noflow_period) & !duplicated(noflow_period),
+              noflow_period_dur]
+)]
+
+
+
+
+# 
+# compute_hydrostats_util <- function(metastats_analyzed)
 
 
 

@@ -227,13 +227,17 @@ list(
                  }                 
                }
              ) %>% rbindlist(., fill=T)
+  ),
+  
+  tar_target(
+    metastats_dt,
+    compute_metastatistics_wrapper(q_outliers_flags)
+  ),
+  
+  tar_target(
+    metastats_analyzed,
+    analyze_metastats(in_metastats_dt=metastats_dt)
   )
-  # ,
-# 
-#   tar_target(
-#     q_outliers_flags,
-#     detect_outliers_ts(in_data=data_for_qc)
-#   )
 )
 
 

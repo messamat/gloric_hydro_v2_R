@@ -1305,24 +1305,85 @@ compute_metastatistics <- function(in_outliers_path, in_no) {
 #in_outliers_output_dt <- tar_read(q_outliers_flags)
 
 compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
-  u_in_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))
-
-  out_dt <- lapply(u_in_dt$grdc_no,
-                function(in_no) {
-                  #print(in_no)
-                  meta_dt <- compute_metastatistics(
-                    in_outliers_path=u_in_dt[grdc_no==in_no,out_qs],
-                    in_no=in_no)
-                  return(meta_dt)
-                }
-  ) %>% rbindlist
-  
+    out_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))[,
+      compute_metastatistics(
+        in_outliers_path=out_qs,
+        in_no=grdc_no),
+      by=grdc_no
+    ]
   return(out_dt)
 }
   
 #---------------- plot_metastats -----------------------------------------------
 #in_metastats_dt <- tar_read(metastats_dt)
+analyze_metastats <- function(in_metastats_dt) {
+  #Check which ones are non-perennial (npr) 
+  # have at least one day < 5L/s if Q50>1 or <= 1L/s if Q50<1
+  in_metastats_dt[, unique(grdc_no)]
+  
+  metastats_npr <- in_metastats_dt[, list(npr = fifelse(
+    Q50>1, 
+    max(ndays_Qu5)>0, 
+    max(ndays_Que1)>0)),
+    by=grdc_no] %>%
+    .[npr==T, unique(grdc_no)]
+  
+  metastats_pformat <- melt(
+    in_metastats_dt[grdc_no %in% metastats_npr,],
+    id.vars=c('grdc_no', 'year'),
+    measure.vars = grep('missingdays_', names(in_metastats_dt), value=T)
+  ) %>%
+    .[, variable := gsub('missingdays_', '', variable)]
+  
+  metastats_nyears <- lapply(seq(0,30, 5), function(max_miss) {
+    out_stats <- metastats_pformat[value<=max_miss, 
+                            list(nyears=.N),
+                            by=c('grdc_no', 'variable')]
+    out_stats[, max_miss := max_miss]
+    return(out_stats)
+  }) %>% rbindlist
+  
+  metastats_ngauges <- lapply(seq(0,30, 5), function(min_nyears) {
+    out_stats <- metastats_nyears[nyears>=min_nyears, 
+                           list(ngauges=.N),
+                           by=c('max_miss','variable')]
+    out_stats[, min_nyears := min_nyears]
+    return(out_stats)
+  }) %>% rbindlist
+  
+  metastats_ngauges[, colmix := rgb(
+    red = max_miss/max(max_miss,na.rm=T), 
+    green=0, 
+    blue=as.numeric(as.factor(variable))/length(unique(variable)))]
+  
+  
+  plot_ngauges <- ggplot(metastats_ngauges, 
+                         aes(x=min_nyears, y=max_miss, color=ngauges)) +
+    geom_text(aes(label=ngauges)) +
+    facet_wrap(~variable) +
+    scale_color_distiller(palette='RdPu') +
+    theme_bw()
+  
+  # ggplot(metastats_ngauges, 
+  #        aes(x=min_nyears, y=ngauges, color=max_miss, group=max_miss)
+  #        )+
+  #   geom_line() +
+  #   scale_color_distiller(palette='PuBu') +
+  #   facet_wrap(~variable) +
+  #   theme_bw()
+  
+  metastats_meanyrs <- metastats_nyears[nyears>15, 
+                                        .SD[, mean(nyears)],
+                                        by=c('max_miss', 'variable')]
+  return(list(
+    plot_ngauges = plot_ngauges,
+    metastats_meanyrs = metastats_meanyrs,
+    metastats_nyears = metastats_nyears
+  ))
+}
 
+#---------------- compute_hydrostats_utils -------------------------------------
+compute_hydrostats_util <- function(metastats_analyzed)
 
 
 

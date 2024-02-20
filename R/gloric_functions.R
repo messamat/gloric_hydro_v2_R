@@ -1245,7 +1245,6 @@ na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
   
   #For interpolation, get rid of leading NAs
   first_nona_ix <- in_dt[,min(which(!is.na(get(in_var))))]-1
-  
   trans_fn <- paste0(in_var, '_trans')
   interp_fn <- paste0(in_var, '_interp')
   
@@ -1270,20 +1269,17 @@ na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
   in_dt[, NAperiod := NULL]
   
 }
-# 
-in_outliers_output_dt <- tar_read(q_outliers_flags)
-lapply(unique(in_outliers_output_dt, by=c('grdc_no'))[,grdc_no], function(in_no) {
-  print(in_no)
-  in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
-  n_freq=365.25
-  in_floor=0
-  compute_metastatistics(in_outliers_path, in_no)
-})
+
+
 #------ compute metastatistics_util --------------------------------------------
-# in_no <- unique(in_outliers_output_dt, by=c('grdc_no'))[1,grdc_no]
-# in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
-# n_freq=365.25
-# in_floor=0
+# in_outliers_output_dt <- tar_read(q_outliers_flags)
+# lapply(unique(in_outliers_output_dt, by=c('grdc_no'))[,grdc_no], function(in_no) {
+#   print(in_no)
+#   in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
+#   n_freq=365.25
+#   in_floor=0
+#   compute_metastatistics_util(in_outliers_path, in_no)
+# })
 
 compute_metastatistics_util <- function(in_outliers_path, in_no) {
   in_dt_edit_path <- paste0(
@@ -1431,34 +1427,60 @@ meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
                                 & get(interp_fn)<=max_miss_sel,]
 
 #Read data, keeping only years with number of missing days under threshold
-#subset columns for speed
 q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
-  .[year %in% meta_sub_yrs$year, .(grdc_no, date, jday, Qobs, year, tmax, PDSI)]
+  .[year %in% meta_sub_yrs$year, .(grdc_no, date, jday, Qobs, year, tmax, PDSI)] %>%#subset columns for speed
+  .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] #remove leading and trailing NAs
 
 #Interpolate discharge, keeping only interpolation periods under threshold
 na_interp_dt_custom(in_dt=q_dt,
                     in_var='Qobs')
 q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
 
-#Prepare data for computing statistics
+
+#Prepare data for computing statistics -----------------------------------------
+#Uniquely identify no-flow period
 q_dt[, noflow_period := rleid(Qobs_interp <= 0.001)] %>%
   .[Qobs_interp > 0.001, noflow_period := NA] %>%
   .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period]
 
+#Identify continuous blocks of 5 years
+whole_5yrblock <- q_dt[order(date) & !duplicated(year),] %>%
+  .[, year_rleid :=  cumsum(c(1, diff(year) != 1))] %>%
+  .[, year_5blockid := ceiling(seq_along(year)/5), by='year_rleid'] %>%
+  .[, year_5blockidn := .N, by=c('year_rleid', 'year_5blockid')] %>%
+  .[year_5blockidn==5, blockid := 10*year_rleid+year_5blockid]
+q_dt <- merge(q_dt, whole_5yrblock[, .(year, blockid)], by='year')
+
 #Compute statistics
 q_stats <- q_dt[, list(
+  #Intermittence
   f0 = sum(Qobs_interp <= 0.001)/.N,
-  meanD = mean(.SD[!is.na(noflow_period) & !duplicated(noflow_period),
-                   noflow_period_dur]),
-  medianD = median(.SD[!is.na(noflow_period) & !duplicated(noflow_period),
-                     noflow_period_dur]),
-  sdN = sd(.SD[!is.na(noflow_period) & !duplicated(noflow_period),
-               noflow_period_dur]),
-  meanN = .SD[!is.na(noflow_period) & !duplicated(noflow_period),
-              noflow_period_dur]
+  #Duration
+  meanD = mean(
+    .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
+  medianD = median(
+    .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
+  sD = sd(
+    .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
+  #d80 is computed, excluding all years not within continuous blocks of 5 years 
+  #in chronological order (i.e., no re-ordering within continuous periods of 
+  #record to minimize or maximize d80)
+  d80 = .SD[!is.na(blockid), 
+           fifelse(sum(!is.na(noflow_period_dur)) > 0,
+                   max(noflow_period_dur, na.rm=T), 0)
+           , by=blockid][, ceiling(quantile(V1, 0.8))],
+  #Frequency
+  meanN = mean(
+    .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1),
+  medianN = median(
+    .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1),
+  sdN = sd(
+    .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1)
 )]
 
 
+
+  
 
 
 # 

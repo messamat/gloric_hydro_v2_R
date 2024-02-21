@@ -1405,10 +1405,12 @@ analyze_metastats <- function(in_metastats_dt) {
 #------ compute_hydrostats_utils -------------------------------------
 in_metastats_dt <- tar_read(metastats_dt)
 in_metastats_analyzed <- tar_read(metastats_analyzed)
+in_gaugep_dt <- tar_read(gaugep_dt)
 
 max_interp_sel = 10
 max_miss_sel = 0
 min_nyears = 15
+q_thresh = 0.001
 
 interp_fn <- paste0('missingdays_edit',
                     fifelse(max_interp_sel >0,
@@ -1436,11 +1438,12 @@ na_interp_dt_custom(in_dt=q_dt,
                     in_var='Qobs')
 q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
 
+in_lat <- in_gaugep_dt[grdc_no==in_no]$y_geo
 
 #Prepare data for computing statistics -----------------------------------------
 #Uniquely identify no-flow period
-q_dt[, noflow_period := rleid(Qobs_interp <= 0.001)] %>%
-  .[Qobs_interp > 0.001, noflow_period := NA] %>%
+q_dt[, noflow_period := rleid(Qobs_interp <= q_thresh)] %>%
+  .[Qobs_interp > q_thresh, noflow_period := NA] %>%
   .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period]
 
 #Identify continuous blocks of 5 years
@@ -1451,10 +1454,62 @@ whole_5yrblock <- q_dt[order(date) & !duplicated(year),] %>%
   .[year_5blockidn==5, blockid := 10*year_rleid+year_5blockid]
 q_dt <- merge(q_dt, whole_5yrblock[, .(year, blockid)], by='year')
 
-#Compute statistics
+#Convert each day i with no flow into an angular (ti) and represent it
+#by a unit vector with rectangular coordinates (cos(ti); sin(ti))
+q_dt[!is.na(noflow_period), `:=`(cos_t=cos(2*pi*(jday-1)/(diny(year)-1)),
+                                 sin_t=sin(2*pi*(jday-1)/(diny(year)-1))
+                                 )]
+
+#Identify contiguous six months with the most zero-flow days for computing Sd6
+identify_drywet6mo <- function(in_dt, q_col='Qobs_interp', 
+                               q_thresh=0.001, jday_col = 'jday') {
+  
+  #Add 3 months before and after record to avoid having NAs on the edges
+  fill_dt <- data.table(rep(NA,91)) %>% setnames(q_col)
+  
+  in_dt <- rbind(fill_dt,
+                rbind(in_dt, fill_dt, 
+                      fill=T),
+                fill=T)
+  
+  #Computer total number of no-flow days in the 6-month period centered around
+  #each day in the record
+  in_dt <- in_dt[, noflow_6morollsum := frollsum(
+    get(q_col) <= q_thresh,
+    n=183, align='center', hasNA=T, na.rm=T)] %>%
+    .[ 92:(.N-91), ]
+  
+  #Find the Julian day with the most number of no-flow days on interannual average
+  driest_6mocenter <- in_dt[
+    , as.Date(
+      unique(get(jday_col))[
+        which.max(.SD[, mean(noflow_6morollsum, na.rm=T),by=jday_col]$V1)],
+      origin=as.Date("1970-01-01"))
+  ]
+  
+  #Identify the 6-month period centered on that julian day as the dry period
+  driest_6moperiod <- data.table(
+    dry_6mo = T,
+    jday = as.numeric(format(
+      seq(driest_6mocenter-91, driest_6mocenter+91, by='day'), '%j'))
+  )
+  
+  #Identify the other julian days as the wet period
+  in_dt <- merge(in_dt, driest_6moperiod, 
+                 by.x=jday_col, by.y='jday', all.x=T) %>%
+    .[is.na(dry_6mo), dry_6mo := F]
+  
+  in_dt[, noflow_6morollsum := NULL]
+  
+  return(in_dt)
+}
+q_dt <- identify_drywet6mo(q_dt)
+
+#Compute statistics ------------------------------------------------------------
 q_stats <- q_dt[, list(
   #Intermittence
   f0 = sum(Qobs_interp <= 0.001)/.N,
+  
   #Duration
   meanD = mean(
     .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
@@ -1469,22 +1524,43 @@ q_stats <- q_dt[, list(
            fifelse(sum(!is.na(noflow_period_dur)) > 0,
                    max(noflow_period_dur, na.rm=T), 0)
            , by=blockid][, ceiling(quantile(V1, 0.8))],
+  
   #Frequency
   meanN = mean(
     .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1),
   medianN = median(
     .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1),
   sdN = sd(
-    .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1)
+    .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1),
+  
+  #Timing
+  theta = atan2(mean(cos_t, na.rm=T), 
+                mean(sin_t, na.rm=T)),
+  r = sqrt(mean(cos_t, na.rm=T)^2 
+           + mean(sin_t, na.rm=T)^2)
 )]
 
+#Adjust theta for stations in southern hemisphere. To avoid discontinuities, 
+#shift the seasons progressively up to 23.5 degrees. 
+#After 23.5, shift by a full half year 
+#i.e. Meteorological summer starts December 1st instead of June 1st
+q_stats[, theta := fifelse(in_lat >= 0,
+                           theta,
+                           (theta - pi*max(-1, (in_lat/23.5)))%%(2*pi)
+                           )]
+
+#Compute seasonal predictability of no-flow events (Sd6)
+q_stats$Sd6 <- q_dt[, ym := format(date, '%Y%m')] %>%
+  .[, any(!is.na(noflow_period)), by=.(year, ym, dry_6mo)] %>%
+  .[, sum(V1, na.rm=T), by=.(year, dry_6mo)] %>% #Compute number of months with zero-flows for each wet and dry period and year
+  .[, 1-(.SD[!dry_6mo,mean(V1)]/.SD[dry_6mo,mean(V1)])]
 
 
-  
 
-
-# 
-# compute_hydrostats_util <- function(metastats_analyzed)
+# Rate of change	Drec	Seasonal recession time scale (Catalogne, 2012) (day)
+# Ic	Concavity index derived from the flow duration curve, introduced by Sauquet and Catalogne (2011) (*) (dimensionless)
+# BFI	Baseflow index computed with the smoothed minima method introduced by the Institute of Hydrology (1980) (dimensionless)
+# medianDr	Median duration of runoff event (*) (day)
 
 
 

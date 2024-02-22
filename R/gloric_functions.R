@@ -338,6 +338,7 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
     in_dt[, year := format(get(date_col), '%Y')]
   }
   
+  yrs_to_keep <- in_dt[, unique(year)]
   
   if (full_yrs) {
     fullyrs_dt <- in_dt[, list(
@@ -361,7 +362,8 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
   setnames(fullyrs_dt, old='V1', new=date_col)
   
   in_dt <- merge(in_dt, fullyrs_dt, 
-                 by=c(date_col,'year'), all.x=T, all.y=T)
+                 by=c(date_col,'year'), all.x=T, all.y=T) %>%
+    .[year %in% yrs_to_keep,]
   
   return(in_dt)
 }
@@ -786,7 +788,7 @@ filter_reference_gauges <- function(in_gmeta_formatted,
   )
 }
 #------ prepare_QC_data_util ---------------------------------------------------
-# in_grdc_no=3651650
+# in_grdc_no=4208549
 # in_ref_gauges = tar_read(ref_gauges)
 # in_gmeta_formatted = tar_read(gmeta_formatted)
 # in_geodist = tar_read(geodist)
@@ -834,6 +836,12 @@ prepare_QC_data_util <- function(in_grdc_no,
           by=c('grdc_no', 'date'),
           all.x=T
     )
+  #F##################################################### FIX TO AVOID DUPLICATES ##################################################
+  # merge(in_rivice[order(-river_ice_fraction) & !duplicated(date),
+  #                 -'mean_elv',with=F],
+  #       by=c('grdc_no', 'date'),
+  #       all.x=T, all.y=F
+  # )
   
   #Get discharge  data from upstream and downstream gauges
   netnear_gauges <- in_netdist[ #Make sure these are also ref_gauges
@@ -1089,15 +1097,13 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda, max_K) {
 
 #------ detect_outliers_ts ----------------------------------------------------
 # data_for_qc<- tar_read(data_for_qc)
-# in_row <- data_for_qc[potential_npr==T & integer_perc<0.95,][77,]
+# in_row <- data_for_qc[potential_npr==T & integer_perc<0.95,][grdc_no=='4208549',]
 # in_data <- qread(in_row[, qs_path][[1]])
 # in_nearg_cols <- in_row[, near_gcols_sel][[1]]
 # arima_split=F
 # plot_fit = F
 # 
-# detect_outliers_ts(in_data, in_nearg_cols, arima_split=F, plot_fit=F) 
-
-fill_dt_dates(full_yrs=F, date_col='date') #Make sure that there are no missing dates within years
+# detect_outliers_ts(in_data, in_nearg_cols, arima_split=F, plot_fit=F)
 
 detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F) {
   #Remove negative values
@@ -1318,11 +1324,11 @@ na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
 #   in_floor=0
 #   compute_metastatistics_util(in_outliers_path, in_no)
 # })
-in_outliers_output_dt <- tar_read(q_outliers_flags)
-in_no <- "4208230"
-in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
-n_freq=365.25
-in_floor=0
+# in_outliers_output_dt <- tar_read(q_outliers_flags)
+# in_no <- "4208230"
+# in_outliers_path<- in_outliers_output_dt[grdc_no==in_no, out_qs][[1]]
+# n_freq=365.25
+# in_floor=0
 
 compute_metastatistics_util <- function(in_outliers_path, in_no) {
   in_dt_edit_path <- paste0(
@@ -1496,14 +1502,27 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
     q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
       .[year %in% meta_sub_yrs$year, 
         .(grdc_no, date, jday, Qobs, year, tmax, PDSI)] %>%#subset columns for speed
-      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] #remove leading and trailing NAs
- 
+      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
+      .[!duplicated(date),] %>%
+      fill_dt_dates(full_yrs=T, date_col='date')
+    
+    #
+    q_dt[is.na(Qobs), `:=`(grdc_no = as.integer(in_no),
+                           jday = as.integer(format(date, '%j'))
+                           )] %>%
+      .[is.na(Qobs) & year>1960, `:=`(tmax = nafill(tmax, type='locf'),
+                                      PDSI = nafill(PDSI, type='locf')
+      )]
     
     #Interpolate discharge, keeping only interpolation periods under threshold
     na_interp_dt_custom(in_dt=q_dt,
                         in_var='Qobs')
-    q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
+    #Fill NA periods < 10 days on the edges of the contiguous periods of record
+    q_dt[, Qobs_interp := nafill(Qobs_interp, type='locf')]
+    q_dt[, Qobs_interp := nafill(Qobs_interp, type='nocb')]
     
+    q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
+
     
     out_stats <- compute_noflow_hydrostats_util(in_dt = q_dt, 
                                                 in_lat = g_lat,
@@ -1757,16 +1776,16 @@ compute_noflow_hydrostats_util <- function(in_dt,
             (quantile(Qobs_interp, 0.99)- quantile(Qobs_interp, 0.01))),
     
     #Proportion of zero-flow days with max monthly temperature under 0
-    sub0C_per = .SD[tmax<-0, sum(Qobs_interp <= q_thresh)]/
+    sub0C_per = .SD[tmax<0, sum(Qobs_interp <= q_thresh)]/
       sum(Qobs_interp <= q_thresh),
     
     subm10C_per = .SD[tmax<-10, sum(Qobs_interp <= q_thresh)]/
       sum(Qobs_interp <= q_thresh),
     
     #50th and 90th quantile of PDSI during no-flow
-    pdsi_50q = .SD[!is.na(noflow_period), quantile(PDSI, 0.5)],
+    pdsi_50q = .SD[!is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)],
     
-    pdsi_90q = .SD[!is.na(noflow_period), quantile(PDSI, 0.9)]
+    pdsi_90q = .SD[!is.na(noflow_period), quantile(PDSI, 0.9, na.rm=T)]
     
   )]
   
@@ -1793,21 +1812,14 @@ compute_noflow_hydrostats_util <- function(in_dt,
   # BFI	Baseflow index computed with the smoothed minima method introduced by the 
   #Institute of Hydrology (1980) (dimensionless)
   #See "Gustard, A., & Demuth, S. (2008). Manual on low-flow estimation and 
-  #prediction. Operational Hydrology Report No. 50 (World Meteorological Organization (WMO), Ed.). Opera."
-  
-  check <- dt[year==1993,]
-  
+  #prediction. Operational Hydrology Report No. 50 (World Meteorological Organization (WMO), Ed.). Opera."s
   q_stats$bfi <-  dt[
     , EflowStats::calc_magLow(x=.SD[, .(as.Date(date), Qobs_interp)],
                               yearType='calendar',
                               pref='median') %>%
       setDT %>%
       .[indice=='ml20', 'statistic']]
-  
-  
-  
-  
-  
+
   # medianDr	Median duration of runoff event (*) (day)
   q_stats$medianDr <- compute_baseflow_gustard(dt) %>%
     compute_medianDr

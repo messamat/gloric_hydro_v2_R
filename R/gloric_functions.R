@@ -1826,7 +1826,7 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
 
 
 #------------------- cluster_gauges --------------------------------------------
-#in_hydrostats <- tar_read(noflow_hydrostats)
+in_hydrostats <- tar_read(noflow_hydrostats)
 
 
 cluster_noflow_gauges <- function(in_hydrostats) {
@@ -1842,62 +1842,128 @@ cluster_noflow_gauges <- function(in_hydrostats) {
   # The variables r × sin(θ) and r × cos(θ) were used instead of r and θ to avoid 
   # an artificial break in winter induced by angles.
   
+  #Set statistics order and weight
+  hydrostats_order <- data.table(
+   variable = c("f0", 
+                "meanD", "medianD", "sD", "d80", 
+                "meanN", "medianN","sdN",        
+                "theta", "r", "Sd6",
+                "Drec", "Ic", "bfi", "medianDr",
+                "sub0C_per","subm10C_per", "pdsi_50q", "pdsi_90q"),
+   aspect = c('Intermittence',
+              rep('Duration', 4),
+              rep('Frequency', 3),
+              rep('Timing', 3),
+              rep('Rate of change', 4),
+              rep('Climate dependence', 4)),
+   weight = c(1,
+              rep(1/4, 4),
+              rep(1/3, 3),
+              rep(1/3, 3),
+              rep(1/4, 4),
+              rep(1/4, 4)
+              )
+  ) %>% 
+    .[, var_order := .I]
+  
   #Pre-format statistics -------------------------------------------------------
   id_dt <- in_hydrostats[f0>0, .(grdc_no, .I)]
-  hydrostats_raw <- in_hydrostats[f0>0, -'grdc_no', with=F]
+  hydrostats_raw <- in_hydrostats[f0>0, -'grdc_no', with=F] %>%
+    .[, I := .I]
   
-  hydrostats_trans <- hydrostats_raw[, sapply(.SD, BoxCox, simplify=T)]
+  hydrostats_distrib_p <- ggplot(melt(hydrostats_raw), aes(x=value)) +
+    geom_density() +
+    facet_wrap(~variable, scales='free')
   
+  #Make sure that all statistics values are strictly positive through linear transformation
+  #adding half of the smallest non-zero value (could do fancier but should do)
+  hydrostats_trans <- melt(hydrostats_raw, id.vars = 'I') %>%
+    merge(hydrostats_order, ., by='variable') %>%
+    .[, stat_min := min(value, na.rm=T), by=variable] %>%
+    .[, value_floored := fifelse(stat_min<0, value-stat_min, value),
+      by=variable] %>%
+    .[, stat_non0min_floored := .SD[value_floored>0, min(value_floored, na.rm=T)],
+      by=variable] %>%
+    .[, 
+      value_pos := fifelse(stat_min<=0,
+                           value_floored + stat_non0min_floored/2,
+                           value_floored),
+      by=variable] %>%
+    .[order(var_order, I),]
   
+  hydrostats_distrib_post_p <- ggplot(hydrostats_trans, aes(x=value_pos)) +
+    geom_density() +
+    facet_wrap(~variable, scales='free')
+
+  #Transform all variables through monotonous trans to approach normal distribution
+  #Get BoxCox lambda values rounded to the nearest 0.5 for simplicity/reproduceability 
+  #(i.e., these values are less likely to change than finer ones)
+  hydrostats_trans[
+    , bc_lambda := 0.5*round(BoxCox.lambda(value_pos)/0.5), 
+    by=variable] %>%
+    .[, value_trans := BoxCox(value_pos, lambda=bc_lambda[[1]]), by=variable]
   
+  #Z-scale stats
+  hydrostats_trans[
+    , value_scaled := scale(value_trans, center=TRUE, scale=TRUE), 
+    by=variable]
   
-  #BoxCox transform
-  BoxCox()
+  hydrostats_distrib_scaled_p <- ggplot(hydrostats_trans, aes(x=value_scaled)) +
+    geom_density() +
+    facet_wrap(~variable, scales='free')
   
+  #Cast to matrix
+  hydrostats_scaled_cast <- dcast(
+    data = hydrostats_trans,
+    formula = I~factor(variable, levels=hydrostats_order$variable),
+    value.var = 'value_scaled')
+  
+  #Impute PDSIq50 and q90 with a median
+  hydrostats_scaled_cast[
+    is.na(pdsi_50q),
+    `:=`(pdsi_50q = median(hydrostats_scaled_cast$pdsi_50q, na.rm=T),
+         pdsi_90q = median(hydrostats_scaled_cast$pdsi_90q, na.rm=T)
+         )]
+  
+  hydrostats_mat <- as.matrix(hydrostats_scaled_cast[,-c('I'), with=F])
   
   #Correlation among variables  ------------------------------------------------
-  var_cor <- dt_sub[, driver_cols_dt$variable, with=F] %>%
-    setnames(as.character(driver_cols_dt$description)) %>%
-    setnames(gsub("water withdrawals", "ww", names(.))) %>%
-    setnames(gsub("surface water", "sw", names(.))) %>%
-    setnames(gsub("gw", "gw", names(.))) %>%
-    cor( method='spearman', use="pairwise.complete.obs")
+  var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
   
   p_varscor <- ggcorrplot(var_cor, #method = "circle", 
-                          hc.order = TRUE, hc.method = 'average',
+                          hc.order = FALSE, hc.method = 'average',
                           type = "upper", lab=T, lab_size =3,
-                          digits=1, insig='blank',
+                          digits=2, insig='blank',
                           outline.color = "white") +
     scale_fill_distiller(
       name=str_wrap("Correlation coefficient Spearman's rho", 20),
       palette='RdBu', 
       limits=c(-1, 1), 
-      breaks=c(-0.8, -0.5, 0, 0.5, 0.8)) +
+      breaks=c(-1, -0.5, 0, 0.5, 1)) +
     theme(legend.position = c(0.8, 0.3))
   
-  #Assign weights to metrics
-  
-  
+
   #Compute Gower's distance based on correlation coefficients and variable weights
-  env_dd_dep_gowdist <- cluster::daisy(env_dd_dep_cormat, 
-                                       metric = "gower",
-                                       weights = driver_cols_dt$weight) %>%
+  gowdist <- cluster::daisy(
+    hydrostats_mat, 
+    metric = "gower",
+    weights = hydrostats_order$weight) %>%
     as.dist
   
   #
   #Cluster departments based on UPGMA or Ward's
-  env_dd_dep_hclust_avg <- hclust(env_dd_dep_gowdist, method='average')
-  env_dd_dep_hclust_ward <- hclust(env_dd_dep_gowdist, method='ward.D2')
-  
-  #test ward and ward.d2
+  hclust_avg <- hclust(gowdist, method='average')
+  hclust_ward <- hclust(gowdist, method='ward.D')
+  hclust_ward2 <- hclust(gowdist, method='ward.D2')
   
   #Keep UPGMA based on cophcor
-  cophcor_avg <- cor(env_dd_dep_gowdist, cophenetic(env_dd_dep_hclust_avg))
-  cophcor_ward <- cor(env_dd_dep_gowdist, cophenetic(env_dd_dep_hclust_ward))
+  cophcor_avg <- cor(gowdist, cophenetic(hclust_avg))
+  cophcor_ward <- cor(gowdist, cophenetic(hclust_ward))
+  cophcor_ward2 <- cor(gowdist, cophenetic(hclust_ward2))
   
   dist_cophcor_dt_avg <- merge(
-    reshape2::melt(as.matrix(env_dd_dep_gowdist)),
-    reshape2::melt(as.matrix(cophenetic(env_dd_dep_hclust_avg))),
+    reshape2::melt(as.matrix(gowdist)),
+    reshape2::melt(as.matrix(cophenetic(hclust_avg))),
     by=c('Var1', 'Var2')) %>%
     setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
   
@@ -1905,17 +1971,17 @@ cluster_noflow_gauges <- function(in_hydrostats) {
   p_cophcor_avg <- ggplot(dist_cophcor_dt_avg, 
                           aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
     geom_point() +
-    geom_abline() +
+    geom_smooth(method='lm') +
     annotate('text', x = 0.5, y=0.1,
              label=paste('Cophenetic correlation =', 
                          round(cophcor_avg, 2))) +
-    coord_fixed(expand=F, 
+    coord_cartesian(expand=F, 
                 ylim=c(0, max(dist_cophcor_dt_avg$`Cophenetic dissimilarity`)+0.05)) +
     theme_classic()
   
   dist_cophcor_dt_ward <- merge(
-    reshape2::melt(as.matrix(env_dd_dep_gowdist)),
-    reshape2::melt(as.matrix(cophenetic(env_dd_dep_hclust_ward))),
+    reshape2::melt(as.matrix(gowdist)),
+    reshape2::melt(as.matrix(cophenetic(hclust_ward))),
     by=c('Var1', 'Var2')) %>%
     setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
   
@@ -1923,17 +1989,17 @@ cluster_noflow_gauges <- function(in_hydrostats) {
   p_cophcor_ward <- ggplot(dist_cophcor_dt_ward, 
                            aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
     geom_point() +
-    geom_abline() +
+    geom_smooth(method='lm') +
     annotate('text', x = 0.5, y=0.1,
              label=paste('Cophenetic correlation =', 
                          round(cophcor_ward, 2))) +
-    coord_fixed(expand=F, 
-                ylim=c(0, max(dist_cophcor_dt_ward$`Cophenetic dissimilarity`)+0.05)) +
+    coord_cartesian(expand=F, 
+                    ylim=c(0, max(dist_cophcor_dt_ward$`Cophenetic dissimilarity`)+0.05)) +
     theme_classic()
   
   #Graph scree plot
-  scree_dt_avg <- data.table(height=env_dd_dep_hclust_avg$height,
-                             groups=length(env_dd_dep_hclust_avg$height):1)
+  scree_dt_avg <- data.table(height=hclust_avg$height,
+                             groups=length(hclust_avg$height):1)
   
   p_scree_avg <- ggplot(scree_dt_avg,
                         aes(x=groups, y=height)) +
@@ -1941,8 +2007,8 @@ cluster_noflow_gauges <- function(in_hydrostats) {
     geom_line() + 
     theme_classic()
   
-  scree_dt_ward <- data.table(height=env_dd_dep_hclust_ward$height,
-                              groups=length(env_dd_dep_hclust_ward$height):1)
+  scree_dt_ward <- data.table(height=hclust_ward$height,
+                              groups=length(hclust_ward$height):1)
   
   p_scree_ward <- ggplot(scree_dt_ward,
                          aes(x=groups, y=height)) +
@@ -1952,28 +2018,33 @@ cluster_noflow_gauges <- function(in_hydrostats) {
   
   #Define class colors
   #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
-  classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D', '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3')
-  classcol_temporal <- c('#e41a1c','#377eb8','#4daf4a','#ff7f00','#666666','#a65628')
+  classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
+                '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3', '#e41a1c',
+                '#4daf4a','#ff7f00')
+  #classcol_temporal <- c(,'#377eb8',,'#666666','#a65628')
   
   
   #Make table of gauge classes and good looking dendogram
-  env_dd_dendo_avg_lesscl <-prettydend(hclus_out = env_dd_dep_hclust_avg, 
-                                       kclass=5, colors=classcol,
+  env_dd_dendo_avg_lesscl <-prettydend(hclus_out = hclust_avg, 
+                                       kclass=4, colors=classcol,
                                        classnames= NULL)
-  env_dd_dendo_avg_morecl <-prettydend(hclus_out = env_dd_dep_hclust_avg, 
-                                       kclass=8, colors=classcol,
+  env_dd_dendo_avg_intcl <-prettydend(hclus_out = hclust_avg, 
+                                       kclass=10, colors=classcol,
+                                       classnames= NULL)
+  env_dd_dendo_avg_morecl <-prettydend(hclus_out = hclust_avg, 
+                                       kclass=14, colors=classcol,
                                        classnames= NULL)
   p_dendo_avg_lesscl <- env_dd_dendo_avg_lesscl[[2]]
   p_dendo_avg_morecl <- env_dd_dendo_avg_morecl[[2]]
   
   
-  env_dd_dep_cor_avg_lesscl <- merge(env_dd_dep_cor, env_dd_dendo_avg_lesscl[[1]],
+  cor_avg_lesscl <- merge(cor, env_dd_dendo_avg_lesscl[[1]],
                                      by.x='NOM', by.y='ID')
-  env_dd_dep_cor_avg_morecl <- merge(env_dd_dep_cor, env_dd_dendo_avg_morecl[[1]],
+  cor_avg_morecl <- merge(cor, env_dd_dendo_avg_morecl[[1]],
                                      by.x='NOM', by.y='ID')
   
   p_cluster_boxplot_avg_lesscl <- ggplot(
-    env_dd_dep_cor_avg_lesscl, 
+    cor_avg_lesscl, 
     aes(x=factor(gclass), y=cor, color=factor(gclass))) +
     geom_boxplot() +
     geom_jitter(color="black", size=0.4, alpha=0.9) +
@@ -1982,7 +2053,7 @@ cluster_noflow_gauges <- function(in_hydrostats) {
   
   
   p_cluster_boxplot_avg_morecl <- ggplot(
-    env_dd_dep_cor_avg_morecl, 
+    cor_avg_morecl, 
     aes(x=factor(gclass), y=cor, color=factor(gclass))) +
     geom_boxplot() +
     geom_jitter(color="black", size=0.4, alpha=0.9) +

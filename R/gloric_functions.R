@@ -1462,78 +1462,6 @@ analyze_metastats <- function(in_metastats_dt) {
 #northwestern Europe and USA: a global perspective. Journal of Hydrology, 126170. 
 #https://doi.org/10.1016/j.jhydrol.2021.126170
 
-# in_metastats_dt <- tar_read(metastats_dt)
-# in_metastats_analyzed <- tar_read(metastats_analyzed)
-# in_gaugep_dt <- tar_read(gaugep_dt)
-# max_interp_sel = 10
-# max_miss_sel = 0
-# min_nyears = 15
-# q_thresh = 0.001
-
-compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
-                                              in_metastats_dt,
-                                              in_gaugep_dt,
-                                              max_interp_sel = 10,
-                                              max_miss_sel = 0,
-                                              min_nyears = 15,
-                                              q_thresh = 0.001) {
-  interp_fn <- paste0('missingdays_edit',
-                      fifelse(max_interp_sel >0,
-                              paste0('_interp', max_interp_sel),
-                              '')
-  )
-  
-  gauges_sel_no <- in_metastats_analyzed$metastats_nyears[
-    max_interp==max_interp_sel & max_miss==max_miss_sel & nyears>=min_nyears,
-    grdc_no]
-  
-
-  qstats_dt <- lapply(gauges_sel_no[1:100], function(in_no) {
-    print(in_no)
-    #For given gauge, get years with less than the maximum number of missing days
-    #given maximum interpolation period
-    meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
-                                    & get(interp_fn)<=max_miss_sel,]
-    
-    #Get latitude of gauge
-    g_lat <- in_gaugep_dt[grdc_no==in_no]$y_geo
-    
-    #Read data, keeping only years with number of missing days under threshold
-    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
-      .[year %in% meta_sub_yrs$year, 
-        .(grdc_no, date, jday, Qobs, year, tmax, PDSI)] %>%#subset columns for speed
-      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
-      .[!duplicated(date),] %>%
-      fill_dt_dates(full_yrs=T, date_col='date')
-    
-    #
-    q_dt[is.na(Qobs), `:=`(grdc_no = as.integer(in_no),
-                           jday = as.integer(format(date, '%j'))
-                           )] %>%
-      .[is.na(Qobs) & year>1960, `:=`(tmax = nafill(tmax, type='locf'),
-                                      PDSI = nafill(PDSI, type='locf')
-      )]
-    
-    #Interpolate discharge, keeping only interpolation periods under threshold
-    na_interp_dt_custom(in_dt=q_dt,
-                        in_var='Qobs')
-    #Fill NA periods < 10 days on the edges of the contiguous periods of record
-    q_dt[, Qobs_interp := nafill(Qobs_interp, type='locf')]
-    q_dt[, Qobs_interp := nafill(Qobs_interp, type='nocb')]
-    
-    q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
-
-    
-    out_stats <- compute_noflow_hydrostats_util(in_dt = q_dt, 
-                                                in_lat = g_lat,
-                                                q_thresh = 0.001)
-    out_stats$grdc_no <- in_no
-
-  }) %>% rbindlist(fill=T)
-  
-}
-
-
 compute_noflow_hydrostats_util <- function(in_dt, 
                                            in_lat,
                                            q_thresh = 0.001) {
@@ -1611,10 +1539,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
                                          jday_col = 'jday') {
     #Make sure that dates for missing data are included so that the rolling window
     #doesn't include non-contiguous periods
-    in_dt <- merge(in_dt, 
-                   in_dt[, list(date=seq(min(get(date_col)), max(get(date_col)),
-                                         by='day'))],
-                   by.x=date_col, by.y='date', all.x=T, all.y=T)
+    in_dt <- fill_dt_dates(in_dt, full_yrs=TRUE)
     
     #Compute long-term 30-day moving average Q by julian day
     #and re=organize this statistic by water year such that the first day of the 
@@ -1622,8 +1547,8 @@ compute_noflow_hydrostats_util <- function(in_dt,
     #the period at the beginning of the year is thus the falling limb
     falling_limb <- in_dt[, mean30dQ := frollmean(Qobs_interp, 31, align='center')] %>%
       .[, list(mean30jdQ =  mean(mean30dQ, na.rm=T)), by='jday'] %>%
-      .[c(which(jday > .[which.max(mean30jdQ), jday]), 
-          which(jday <= .[which.max(mean30jdQ), jday])),] %>%
+      .[c(which(jday >= .[which.max(mean30jdQ), jday]), 
+          which(jday < .[which.max(mean30jdQ), jday])),] %>%
       .[, ix := .I]
     
     #Identify the seasonal recession comprised between the 90th quantile and median
@@ -1648,10 +1573,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
                                        date_col = 'date', plot=F) {
     #Make sure that dates for missing data are included so that the rolling window
     #doesn't include non-contiguous periods
-    in_dt <- in_dt[, list(v1 = seq(min(get(date_col)), max(get(date_col)), 
-                                   by='day'))] %>%
-      setnames(date_col) %>%
-      merge(in_dt, . , by=date_col, all.x=T, all.y=T)
+    in_dt <- fill_dt_dates(in_dt, full_yrs=TRUE)
     
     #Divide record in 5-day blocks
     in_dt[order(date), block5 := c(rep(seq(1,floor(.N/5)), each=5), 
@@ -1779,7 +1701,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
     sub0C_per = .SD[tmax<0, sum(Qobs_interp <= q_thresh)]/
       sum(Qobs_interp <= q_thresh),
     
-    subm10C_per = .SD[tmax<-10, sum(Qobs_interp <= q_thresh)]/
+    subm10C_per = .SD[tmax<(-10), sum(Qobs_interp <= q_thresh)]/
       sum(Qobs_interp <= q_thresh),
     
     #50th and 90th quantile of PDSI during no-flow
@@ -1828,41 +1750,256 @@ compute_noflow_hydrostats_util <- function(in_dt,
 }
 
 
+#------------------- compute_noflow_hydrostats_wrapper -------------------------
+# in_metastats_dt <- tar_read(metastats_dt)
+# in_metastats_analyzed <- tar_read(metastats_analyzed)
+# in_gaugep_dt <- tar_read(gaugep_dt)
+# max_interp_sel = 10
+# max_miss_sel = 0
+# min_nyears = 15
+# q_thresh = 0.001
+
+compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
+                                              in_metastats_dt,
+                                              in_gaugep_dt,
+                                              max_interp_sel = 10,
+                                              max_miss_sel = 0,
+                                              min_nyears = 15,
+                                              q_thresh = 0.001) {
+  interp_fn <- paste0('missingdays_edit',
+                      fifelse(max_interp_sel >0,
+                              paste0('_interp', max_interp_sel),
+                              '')
+  )
+  
+  gauges_sel_no <- in_metastats_analyzed$metastats_nyears[
+    max_interp==max_interp_sel & max_miss==max_miss_sel & nyears>=min_nyears,
+    grdc_no]
+  
+  
+  qstats_dt <- future_lapply(gauges_sel_no, function(in_no) {
+    print(in_no)
+    #For given gauge, get years with less than the maximum number of missing days
+    #given maximum interpolation period
+    meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
+                                    & get(interp_fn)<=max_miss_sel,]
+    
+    #Get latitude of gauge
+    g_lat <- in_gaugep_dt[grdc_no==in_no]$y_geo
+    
+    #Read data, keeping only years with number of missing days under threshold
+    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
+      .[year %in% meta_sub_yrs$year, 
+        .(grdc_no, date, jday, Qobs, year, tmax, PDSI)] %>%#subset columns for speed
+      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
+      .[!duplicated(date),] %>%
+      fill_dt_dates(full_yrs=T, date_col='date')
+    
+    #
+    q_dt[is.na(Qobs), `:=`(grdc_no = as.integer(in_no),
+                           jday = as.integer(format(date, '%j'))
+    )] %>%
+      .[is.na(Qobs) & year>1960, `:=`(tmax = nafill(tmax, type='locf'),
+                                      PDSI = nafill(PDSI, type='locf')
+      )]
+    
+    #Interpolate discharge, keeping only interpolation periods under threshold
+    na_interp_dt_custom(in_dt=q_dt,
+                        in_var='Qobs')
+    #Fill NA periods < 10 days on the edges of the contiguous periods of record
+    q_dt[, Qobs_interp := nafill(Qobs_interp, type='locf')]
+    q_dt[, Qobs_interp := nafill(Qobs_interp, type='nocb')]
+    
+    q_dt[NAperiod_n > max_interp_sel, Qobs_interp := NA]
+    
+    
+    out_stats <- compute_noflow_hydrostats_util(in_dt = q_dt, 
+                                                in_lat = g_lat,
+                                                q_thresh = 0.001)
+    out_stats$grdc_no <- in_no
+    
+    return(out_stats)
+  }) %>% rbindlist(fill=T)
+  
+  return(qstats_dt)
+}
 
 
+#------------------- cluster_gauges --------------------------------------------
+#in_hydrostats <- tar_read(noflow_hydrostats)
 
-# dat_qs_list <- tar_read(data_for_qc)[potential_npr==T & integer_perc < 0.80, qs_path]
-# as.data.table(qread(dat_qs_list[[1]]) )
-# 
-# outlier_qs_list <- file.path(temp_qs_dir,
-#                              gsub('data_for_qc_', 'q_outliers_flags_',
-#                                   basename(dat_qs_list)))
-# 
-# for (i in seq(1, 20)) {
-#   in_dat_path <- dat_qs_list[[i]]
-#   in_qs <- file.path(temp_qs_dir,
-#                      gsub('data_for_qc_',
-#                           'q_outliers_flags_',
-#                           basename(in_dat_path))
-#   )
-#   in_dat <- qread(in_dat_path)
-#   integer_perc <- in_dat[!is.na(Qobs),
-#                          sum(fifelse(Qobs == round(Qobs), 1, 0))/.N]
-#   print(integer_perc)
+
+cluster_noflow_gauges <- function(in_hydrostats) {
+  #The metrics related to no-flow conditions are overrepresented in the list of 
+  # selected metrics, in accordance with the objective of characterizing flow 
+  # regime of IRES. Further transformations were applied to normalize metrics 
+  # and reduce asymmetry in empirical distributions: the metrics related to 
+  # duration medianDr, meanD, medianD, sdD were log-transformed; Qp, p = 1, 90
+  # were divided by the mean long-term annual discharge before being square-root 
+  # transformed; F0, medianN, sdN, Drec and Ic were square-root transformed. The 
+  # mean date θ was transformed to allow comparison of the timing with no-flow 
+  # conditions accounting for the shift in seasons between the two hemispheres. 
+  # The variables r × sin(θ) and r × cos(θ) were used instead of r and θ to avoid 
+  # an artificial break in winter induced by angles.
+  
+  #Pre-format statistics -------------------------------------------------------
+  id_dt <- in_hydrostats[f0>0, .(grdc_no, .I)]
+  hydrostats_raw <- in_hydrostats[f0>0, -'grdc_no', with=F]
+  
+  hydrostats_trans <- hydrostats_raw[, sapply(.SD, BoxCox, simplify=T)]
+  
+  
+  
+  
+  #BoxCox transform
+  BoxCox()
+  
+  
+  #Correlation among variables  ------------------------------------------------
+  var_cor <- dt_sub[, driver_cols_dt$variable, with=F] %>%
+    setnames(as.character(driver_cols_dt$description)) %>%
+    setnames(gsub("water withdrawals", "ww", names(.))) %>%
+    setnames(gsub("surface water", "sw", names(.))) %>%
+    setnames(gsub("gw", "gw", names(.))) %>%
+    cor( method='spearman', use="pairwise.complete.obs")
+  
+  p_varscor <- ggcorrplot(var_cor, #method = "circle", 
+                          hc.order = TRUE, hc.method = 'average',
+                          type = "upper", lab=T, lab_size =3,
+                          digits=1, insig='blank',
+                          outline.color = "white") +
+    scale_fill_distiller(
+      name=str_wrap("Correlation coefficient Spearman's rho", 20),
+      palette='RdBu', 
+      limits=c(-1, 1), 
+      breaks=c(-0.8, -0.5, 0, 0.5, 0.8)) +
+    theme(legend.position = c(0.8, 0.3))
+  
+  #Assign weights to metrics
+  
+  
+  #Compute Gower's distance based on correlation coefficients and variable weights
+  env_dd_dep_gowdist <- cluster::daisy(env_dd_dep_cormat, 
+                                       metric = "gower",
+                                       weights = driver_cols_dt$weight) %>%
+    as.dist
+  
+  #
+  #Cluster departments based on UPGMA or Ward's
+  env_dd_dep_hclust_avg <- hclust(env_dd_dep_gowdist, method='average')
+  env_dd_dep_hclust_ward <- hclust(env_dd_dep_gowdist, method='ward.D2')
+  
+  #test ward and ward.d2
+  
+  #Keep UPGMA based on cophcor
+  cophcor_avg <- cor(env_dd_dep_gowdist, cophenetic(env_dd_dep_hclust_avg))
+  cophcor_ward <- cor(env_dd_dep_gowdist, cophenetic(env_dd_dep_hclust_ward))
+  
+  dist_cophcor_dt_avg <- merge(
+    reshape2::melt(as.matrix(env_dd_dep_gowdist)),
+    reshape2::melt(as.matrix(cophenetic(env_dd_dep_hclust_avg))),
+    by=c('Var1', 'Var2')) %>%
+    setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
+  
+  #Plot cophenetic correlation
+  p_cophcor_avg <- ggplot(dist_cophcor_dt_avg, 
+                          aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
+    geom_point() +
+    geom_abline() +
+    annotate('text', x = 0.5, y=0.1,
+             label=paste('Cophenetic correlation =', 
+                         round(cophcor_avg, 2))) +
+    coord_fixed(expand=F, 
+                ylim=c(0, max(dist_cophcor_dt_avg$`Cophenetic dissimilarity`)+0.05)) +
+    theme_classic()
+  
+  dist_cophcor_dt_ward <- merge(
+    reshape2::melt(as.matrix(env_dd_dep_gowdist)),
+    reshape2::melt(as.matrix(cophenetic(env_dd_dep_hclust_ward))),
+    by=c('Var1', 'Var2')) %>%
+    setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
+  
+  #Plot cophenetic correlation
+  p_cophcor_ward <- ggplot(dist_cophcor_dt_ward, 
+                           aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
+    geom_point() +
+    geom_abline() +
+    annotate('text', x = 0.5, y=0.1,
+             label=paste('Cophenetic correlation =', 
+                         round(cophcor_ward, 2))) +
+    coord_fixed(expand=F, 
+                ylim=c(0, max(dist_cophcor_dt_ward$`Cophenetic dissimilarity`)+0.05)) +
+    theme_classic()
+  
+  #Graph scree plot
+  scree_dt_avg <- data.table(height=env_dd_dep_hclust_avg$height,
+                             groups=length(env_dd_dep_hclust_avg$height):1)
+  
+  p_scree_avg <- ggplot(scree_dt_avg,
+                        aes(x=groups, y=height)) +
+    geom_point() +
+    geom_line() + 
+    theme_classic()
+  
+  scree_dt_ward <- data.table(height=env_dd_dep_hclust_ward$height,
+                              groups=length(env_dd_dep_hclust_ward$height):1)
+  
+  p_scree_ward <- ggplot(scree_dt_ward,
+                         aes(x=groups, y=height)) +
+    geom_point() +
+    geom_line() + 
+    theme_classic()
+  
+  #Define class colors
+  #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
+  classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D', '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3')
+  classcol_temporal <- c('#e41a1c','#377eb8','#4daf4a','#ff7f00','#666666','#a65628')
+  
+  
+  #Make table of gauge classes and good looking dendogram
+  env_dd_dendo_avg_lesscl <-prettydend(hclus_out = env_dd_dep_hclust_avg, 
+                                       kclass=5, colors=classcol,
+                                       classnames= NULL)
+  env_dd_dendo_avg_morecl <-prettydend(hclus_out = env_dd_dep_hclust_avg, 
+                                       kclass=8, colors=classcol,
+                                       classnames= NULL)
+  p_dendo_avg_lesscl <- env_dd_dendo_avg_lesscl[[2]]
+  p_dendo_avg_morecl <- env_dd_dendo_avg_morecl[[2]]
+  
+  
+  env_dd_dep_cor_avg_lesscl <- merge(env_dd_dep_cor, env_dd_dendo_avg_lesscl[[1]],
+                                     by.x='NOM', by.y='ID')
+  env_dd_dep_cor_avg_morecl <- merge(env_dd_dep_cor, env_dd_dendo_avg_morecl[[1]],
+                                     by.x='NOM', by.y='ID')
+  
+  p_cluster_boxplot_avg_lesscl <- ggplot(
+    env_dd_dep_cor_avg_lesscl, 
+    aes(x=factor(gclass), y=cor, color=factor(gclass))) +
+    geom_boxplot() +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    geom_hline(yintercept=0) +
+    facet_wrap(~description)
+  
+  
+  p_cluster_boxplot_avg_morecl <- ggplot(
+    env_dd_dep_cor_avg_morecl, 
+    aes(x=factor(gclass), y=cor, color=factor(gclass))) +
+    geom_boxplot() +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    geom_hline(yintercept=0) +
+    facet_wrap(~description)
+  
+  
+}
+
+# analyze_cluster_sensitivity <- function(in_cluster) {
+#   #Permute each variable
+#   #Remove each gauge
+#   
+#   #Compute correlation between clusters in terms of membership
+#   #Compute cophenetic correlation between trees
+#   
 # }
-# 
-# in_dat_path <- dat_qs_list[[5]]
-# in_qs <- file.path(temp_qs_dir,
-#                    gsub('data_for_qc_',
-#                         'q_outliers_flags_',
-#                         basename(in_dat_path))
-# )
-# in_dat <- qread(in_dat_path)$q_dt_attri
-# in_outliers_qs <- qread(in_qs)
-# in_outliers <- in_outliers_qs$outliers_dt
-
-# in_outliers_qs$p_fit_forplotly$data
-
 
 
 ################### EXTRA STUFF ################################################

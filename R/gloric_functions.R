@@ -367,6 +367,75 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
   
   return(in_dt)
 }
+#Make a nice looking dendogram based on a clustering output
+prettydend <- function(hclus_out, colorder=NULL, colors=NULL, labels=NULL,
+                       kclass=7, classnames = NULL) {
+  classr <- dendextend::cutree(hclus_out, k=kclass, 
+                               order_clusters_as_data = FALSE)
+  classr_df <- data.frame(ID=names(classr), gclass=classr) 
+  
+  if (!is.null(classnames)) {
+    classr_df <- merge(classr_df, classnames, by='gclass')
+    grouplabels <- classnames$classnames
+  } else {
+    grouplabels <- TRUE
+  }
+  
+  if (!is.null(labels)) {
+    hclus_out$labels <- labels
+  }
+  
+  if (is.null(colorder)) colorder = 1:kclass
+  
+  # Extract the heights of the branches
+  heights <- hclus_out$height
+  # Choose the appropriate value for h based on the heights
+  desired_h <- kclass  # Set the desired number of clusters
+  chosen_h <- heights[length(heights) - desired_h + 1]
+
+  dendr <- dendro_data(hclus_out, type="rectangle")
+  dend_segs <- segment(dendr)[segment(dendr)$y>chosen_h,]
+  #dend_labels <- label(dendr)[label(dendr)$y>chosen_h,]
+  hori_segs <- dend_segs[dend_segs$y==dend_segs$yend,]
+  
+  ggplot() + 
+    geom_segment(data=dend_segs, 
+                 aes(x=x, y=y, xend=xend, yend=yend)) +
+    scale_y_reverse(name="Gower's distance") + 
+    coord_flip(ylim=c(limits=c(max(dend_segs$yend), min(hori_segs$yend))),
+               clip='on') + 
+    theme(axis.line.y=element_blank(),
+          axis.ticks.y=element_blank(),
+          axis.text.y=element_blank(),
+          axis.title.y=element_blank(),
+          panel.background=element_rect(fill="white"),
+          panel.grid=element_blank(),
+          plot.margin = margin(0,1,0,0, 'cm')
+    )
+  
+  
+#   ggdendro <- dendname_cut$upper %>% 
+#     set("branches_lwd", 1) %>%
+#     color_branches(k=kclass, col=colors[colorder]) %>%
+#     #color_branches(clusters=as.numeric(temp_col), col=levels(temp_col), groupLabels=as.character(as.numeric(temp_col))) %>%
+#     color_labels(k=kclass, col=colors[colorder])  %>%
+#     as.ggdend
+#   
+#   ggplot(ggdendro) +
+#     scale_y_reverse() +
+#     labs(x="Gower's distance", y='Gauge number') +
+#     coord_flip() +
+#     theme(axis.text.x = element_text(angle=90))
+#   
+#   par(cex=0.7, mar=c(2.5, 1, 0, 9)) #bottom left top right
+# %>%
+#     plot(horiz=TRUE,xlab="Gower's distance", ylab="Department",mgp=c(1.5,0.5,0)) %>%
+#     capture.output
+
+  
+  return(list(classes=classr_df, 
+              plot=dendname))
+}
 ############################ ANALYSIS FUNCTIONS ##################################
 #------ read_GRDCgauged_paths -----------------
 #' Read file paths to streamflow data from GRDC gauging stations
@@ -1750,7 +1819,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
 }
 
 
-#------------------- compute_noflow_hydrostats_wrapper -------------------------
+#------ compute_noflow_hydrostats_wrapper -------------------------
 # in_metastats_dt <- tar_read(metastats_dt)
 # in_metastats_analyzed <- tar_read(metastats_analyzed)
 # in_gaugep_dt <- tar_read(gaugep_dt)
@@ -1825,11 +1894,11 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
 }
 
 
-#------------------- cluster_gauges --------------------------------------------
-in_hydrostats <- tar_read(noflow_hydrostats)
+#------ cluster_gauges --------------------------------------------
+#in_hydrostats <- tar_read(noflow_hydrostats)
 
 
-cluster_noflow_gauges <- function(in_hydrostats) {
+cluster_noflow_gauges_full <- function(in_hydrostats) {
   #The metrics related to no-flow conditions are overrepresented in the list of 
   # selected metrics, in accordance with the objective of characterizing flow 
   # regime of IRES. Further transformations were applied to normalize metrics 
@@ -1926,6 +1995,7 @@ cluster_noflow_gauges <- function(in_hydrostats) {
          )]
   
   hydrostats_mat <- as.matrix(hydrostats_scaled_cast[,-c('I'), with=F])
+  row.names(hydrostats_mat) <- id_dt[order(I), grdc_no]
   
   #Correlation among variables  ------------------------------------------------
   var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
@@ -1951,7 +2021,7 @@ cluster_noflow_gauges <- function(in_hydrostats) {
     as.dist
   
   #
-  #Cluster departments based on UPGMA or Ward's
+  #Cluster departments based on UPGMA or Ward's---------------------------------
   hclust_avg <- hclust(gowdist, method='average')
   hclust_ward <- hclust(gowdist, method='ward.D')
   hclust_ward2 <- hclust(gowdist, method='ward.D2')
@@ -1967,7 +2037,7 @@ cluster_noflow_gauges <- function(in_hydrostats) {
     by=c('Var1', 'Var2')) %>%
     setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
   
-  #Plot cophenetic correlation
+  #Plot cophenetic correlation--------------------------------------------------
   p_cophcor_avg <- ggplot(dist_cophcor_dt_avg, 
                           aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
     geom_point() +
@@ -1997,7 +2067,7 @@ cluster_noflow_gauges <- function(in_hydrostats) {
                     ylim=c(0, max(dist_cophcor_dt_ward$`Cophenetic dissimilarity`)+0.05)) +
     theme_classic()
   
-  #Graph scree plot
+  #Graph scree plot ------------------------------------------------------------
   scree_dt_avg <- data.table(height=hclust_avg$height,
                              groups=length(hclust_avg$height):1)
   
@@ -2016,7 +2086,7 @@ cluster_noflow_gauges <- function(in_hydrostats) {
     geom_line() + 
     theme_classic()
   
-  #Define class colors
+  #Define class colors------------------------------------------------------------
   #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
   classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
                 '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3', '#e41a1c',
@@ -2024,43 +2094,44 @@ cluster_noflow_gauges <- function(in_hydrostats) {
   #classcol_temporal <- c(,'#377eb8',,'#666666','#a65628')
   
   
-  #Make table of gauge classes and good looking dendogram
-  env_dd_dendo_avg_lesscl <-prettydend(hclus_out = hclust_avg, 
-                                       kclass=4, colors=classcol,
-                                       classnames= NULL)
-  env_dd_dendo_avg_intcl <-prettydend(hclus_out = hclust_avg, 
-                                       kclass=10, colors=classcol,
-                                       classnames= NULL)
-  env_dd_dendo_avg_morecl <-prettydend(hclus_out = hclust_avg, 
-                                       kclass=14, colors=classcol,
-                                       classnames= NULL)
-  p_dendo_avg_lesscl <- env_dd_dendo_avg_lesscl[[2]]
-  p_dendo_avg_morecl <- env_dd_dendo_avg_morecl[[2]]
+  #Make table of gauge classes and good looking dendogram-----------------------
+  cuttree_and_visualize <- function(in_hclus, in_kclass, in_colors, 
+                                    in_meltdt, id_col, 
+                                    value_col='value', variable_col='variable',
+                                    classnames= NULL) {
+    
+    dendo_format <-prettydend(hclus_out = in_hclus, 
+                              kclass=in_kclass, colors=in_colors,
+                              classnames= NULL)
+    
+    class_stats <- merge(in_meltdt,  dendo_format$classes, 
+                         by.x=id_col, by.y='ID') 
+    
+    p_cluster_boxplot <- ggplot(
+      class_stats, 
+      aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
+      geom_boxplot() +
+      geom_jitter(color="black", size=0.4, alpha=0.9) +
+      geom_hline(yintercept=0) +
+      facet_wrap(~get(variable_col), scales='free')
+    
+    return(list(
+      class_dt = class_stats,
+      p_dendo = dendo_format$plot,
+      p_boxplot = p_cluster_boxplot
+    )
+    )
+  }
   
-  
-  cor_avg_lesscl <- merge(cor, env_dd_dendo_avg_lesscl[[1]],
-                                     by.x='NOM', by.y='ID')
-  cor_avg_morecl <- merge(cor, env_dd_dendo_avg_morecl[[1]],
-                                     by.x='NOM', by.y='ID')
-  
-  p_cluster_boxplot_avg_lesscl <- ggplot(
-    cor_avg_lesscl, 
-    aes(x=factor(gclass), y=cor, color=factor(gclass))) +
-    geom_boxplot() +
-    geom_jitter(color="black", size=0.4, alpha=0.9) +
-    geom_hline(yintercept=0) +
-    facet_wrap(~description)
-  
-  
-  p_cluster_boxplot_avg_morecl <- ggplot(
-    cor_avg_morecl, 
-    aes(x=factor(gclass), y=cor, color=factor(gclass))) +
-    geom_boxplot() +
-    geom_jitter(color="black", size=0.4, alpha=0.9) +
-    geom_hline(yintercept=0) +
-    facet_wrap(~description)
-  
-  
+  lapply(c(4, 10, 14), function(kclass) {
+    cluster_analyzed <- cuttree_and_visualize(
+      in_hclus = hclust_avg,
+      in_kclass = kclass,
+      in_colors = classcol, 
+      in_meltdt = merge(hydrostats_trans, id_dt, by='I'),
+      id_col = 'grdc_no')
+  })
+
 }
 
 # analyze_cluster_sensitivity <- function(in_cluster) {

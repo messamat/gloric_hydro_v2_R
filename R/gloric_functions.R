@@ -395,85 +395,59 @@ prettydend <- function(hclus_out, colorder=NULL, colors=NULL, in_labels=NULL,
   dendname_cut <- as.dendrogram(hclus_out) %>%
     cut(h=chosen_h)
 
+  #Get a basic dendrogram with the right colors
   ggdendro_p <- dendname_cut$upper %>%
     set("branches_lwd", 1) %>%
     color_branches(k=kclass, col=colors[colorder]) %>%
-    #color_branches(clusters=as.numeric(temp_col), col=levels(temp_col), groupLabels=as.character(as.numeric(temp_col))) %>%
-    color_labels(k=kclass, col=colors[colorder])  %>%
+    color_labels(k=kclass, col='white')  %>% #Create background labels in white to create a halo
     as.ggdend
   
+  #Get cutoff length
   dend_segs <- ggdendro_p$segments  #[segment(dendr)$y>chosen_h,]
   hori_segs <- dend_segs[dend_segs$y==dend_segs$yend,]
+  
+  #Correct label positions that got mangled through "as.ggdend"
   new_leaves <- dend_segs[dend_segs$yend < min(hori_segs$yend),]
   names(new_leaves) <- paste0(names(new_leaves), 'leaves')
-  ggdendro_p$labels$x <- new_leaves$xendleaves #Correct label positions that got mangled through "as.ggdend"
+  ggdendro_p$labels$x <- new_leaves$xendleaves 
   ggdendro_p$labels$y <- min(hori_segs$yend)
-
+  
+  #Get labels to superimpose upon halo
+  new_classlabels <- ggdendro_p$labels
+  new_classlabels$col <- colors[colorder]
+  
+  #Background rectangle for labels
+  rect_df <- data.frame(
+    xmin=min(dend_segs$x)-5,
+    xmax=max(dend_segs$x)+5,
+    ymin=0.5*min(hori_segs$yend), 
+    ymax=0.95*min(hori_segs$yend)
+  )
+  
+  #Format ggplot
   ggdendro_p_format <- ggplot(ggdendro_p) +
     scale_y_reverse(name="Gower's distance")   + 
-    coord_flip(ylim=c(limits=c(max(dend_segs$yend), min(hori_segs$yend))),
-               clip='on')
+    geom_rect(data=rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
+              fill='white') +
+    geom_text(data = new_classlabels, 
+              aes_string(x = "x", y = 0.94*min(hori_segs$yend), label = "label", 
+                         colour = "col", size = "cex"), 
+              hjust=0, angle = 0) +
+    coord_flip(ylim=c(limits=c(max(dend_segs$yend), 0.85*min(hori_segs$yend))), #min(hori_segs$yend)
+               clip='on') +
+    theme_classic() +
+    theme(plot.margin = margin(0,1,0,0, 'cm'),
+          axis.line.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          axis.ticks.y = element_blank())
   
-  ggdendro_p_format$layers[[3]]$aes_params$angle <- 0
-  ggdendro_p_format$layers[[3]]$aes_params$vjust<- -0.5
-  
-  ggdendro_p_format
-
-  
-  
-  # dend_ggplot <- dendname_cut$upper %>%
-  #   set("branches_lwd", 1) %>%
-  #   color_branches(k=kclass, col=colors[colorder]) %>%
-  #   color_labels(k=kclass, col=colors[colorder]) %>%
-  #   as.ggdend
-  # 
-  # # Manually adjust label positions
-  # dend_ggplot <- dend_ggplot 
-  # 
-  # 
-  # 
-  # +
-  #   + 
-  #   theme(axis.line.y=element_blank(),
-  #         axis.ticks.y=element_blank(),
-  #         axis.text.y=element_blank(),
-  #         axis.title.y=element_blank(),
-  #         panel.background=element_rect(fill="white"),
-  #         panel.grid=element_blank(),
-  #         plot.margin = margin(0,1,0,0, 'cm')
-  #   )
-
-
-  # ggplot() + 
-  #   geom_segment(data=dend_segs, 
-  #                aes(x=x, y=y, xend=xend, yend=yend)) +
-  #   scale_y_reverse(name="Gower's distance") + 
-  #   coord_flip(ylim=c(limits=c(max(dend_segs$yend), min(hori_segs$yend))),
-  #              clip='on') + 
-  #   theme(axis.line.y=element_blank(),
-  #         axis.ticks.y=element_blank(),
-  #         axis.text.y=element_blank(),
-  #         axis.title.y=element_blank(),
-  #         panel.background=element_rect(fill="white"),
-  #         panel.grid=element_blank(),
-  #         plot.margin = margin(0,1,0,0, 'cm')
-  #   )
-  
-  
-#   ggplot(ggdendro) +
-#     scale_y_reverse() +
-#     labs(x="Gower's distance", y='Gauge number') +
-#     coord_flip() +
-#     theme(axis.text.x = element_text(angle=90))
-#   
-#   par(cex=0.7, mar=c(2.5, 1, 0, 9)) #bottom left top right
-# %>%
-#     plot(horiz=TRUE,xlab="Gower's distance", ylab="Department",mgp=c(1.5,0.5,0)) %>%
-#     capture.output
-
+  # ggdendro_p_format$layers[[3]]$aes_params$angle <- 0
+  # ggdendro_p_format$layers[[3]]$aes_params$hjust<- 0.75
+  ggdendro_p_format$layers[[3]] <- NULL
   
   return(list(classes=classr_df, 
-              plot=dendname))
+              plot=ggdendro_p_format))
 }
 ############################ ANALYSIS FUNCTIONS ##################################
 #------ read_GRDCgauged_paths -----------------

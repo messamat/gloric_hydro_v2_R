@@ -368,7 +368,7 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
   return(in_dt)
 }
 #Make a nice looking dendogram based on a clustering output
-prettydend <- function(hclus_out, colorder=NULL, colors=NULL, labels=NULL,
+prettydend <- function(hclus_out, colorder=NULL, colors=NULL, in_labels=NULL,
                        kclass=7, classnames = NULL) {
   classr <- dendextend::cutree(hclus_out, k=kclass, 
                                order_clusters_as_data = FALSE)
@@ -381,8 +381,8 @@ prettydend <- function(hclus_out, colorder=NULL, colors=NULL, labels=NULL,
     grouplabels <- TRUE
   }
   
-  if (!is.null(labels)) {
-    hclus_out$labels <- labels
+  if (!is.null(in_labels)) {
+    hclus_out$labels <- in_labels
   }
   
   if (is.null(colorder)) colorder = 1:kclass
@@ -391,36 +391,75 @@ prettydend <- function(hclus_out, colorder=NULL, colors=NULL, labels=NULL,
   heights <- hclus_out$height
   # Choose the appropriate value for h based on the heights
   desired_h <- kclass  # Set the desired number of clusters
-  chosen_h <- heights[length(heights) - desired_h + 1]
+  chosen_h <- heights[length(heights) - desired_h]
+  dendname_cut <- as.dendrogram(hclus_out) %>%
+    cut(h=chosen_h)
 
-  dendr <- dendro_data(hclus_out, type="rectangle")
-  dend_segs <- segment(dendr)[segment(dendr)$y>chosen_h,]
-  #dend_labels <- label(dendr)[label(dendr)$y>chosen_h,]
+  ggdendro_p <- dendname_cut$upper %>%
+    set("branches_lwd", 1) %>%
+    color_branches(k=kclass, col=colors[colorder]) %>%
+    #color_branches(clusters=as.numeric(temp_col), col=levels(temp_col), groupLabels=as.character(as.numeric(temp_col))) %>%
+    color_labels(k=kclass, col=colors[colorder])  %>%
+    as.ggdend
+  
+  dend_segs <- ggdendro_p$segments  #[segment(dendr)$y>chosen_h,]
   hori_segs <- dend_segs[dend_segs$y==dend_segs$yend,]
-  
-  ggplot() + 
-    geom_segment(data=dend_segs, 
-                 aes(x=x, y=y, xend=xend, yend=yend)) +
-    scale_y_reverse(name="Gower's distance") + 
+  new_leaves <- dend_segs[dend_segs$yend < min(hori_segs$yend),]
+  names(new_leaves) <- paste0(names(new_leaves), 'leaves')
+  ggdendro_p$labels$x <- new_leaves$xendleaves #Correct label positions that got mangled through "as.ggdend"
+  ggdendro_p$labels$y <- min(hori_segs$yend)
+
+  ggdendro_p_format <- ggplot(ggdendro_p) +
+    scale_y_reverse(name="Gower's distance")   + 
     coord_flip(ylim=c(limits=c(max(dend_segs$yend), min(hori_segs$yend))),
-               clip='on') + 
-    theme(axis.line.y=element_blank(),
-          axis.ticks.y=element_blank(),
-          axis.text.y=element_blank(),
-          axis.title.y=element_blank(),
-          panel.background=element_rect(fill="white"),
-          panel.grid=element_blank(),
-          plot.margin = margin(0,1,0,0, 'cm')
-    )
+               clip='on')
+  
+  ggdendro_p_format$layers[[3]]$aes_params$angle <- 0
+  ggdendro_p_format$layers[[3]]$aes_params$vjust<- -0.5
+  
+  ggdendro_p_format
+
   
   
-#   ggdendro <- dendname_cut$upper %>% 
-#     set("branches_lwd", 1) %>%
-#     color_branches(k=kclass, col=colors[colorder]) %>%
-#     #color_branches(clusters=as.numeric(temp_col), col=levels(temp_col), groupLabels=as.character(as.numeric(temp_col))) %>%
-#     color_labels(k=kclass, col=colors[colorder])  %>%
-#     as.ggdend
-#   
+  # dend_ggplot <- dendname_cut$upper %>%
+  #   set("branches_lwd", 1) %>%
+  #   color_branches(k=kclass, col=colors[colorder]) %>%
+  #   color_labels(k=kclass, col=colors[colorder]) %>%
+  #   as.ggdend
+  # 
+  # # Manually adjust label positions
+  # dend_ggplot <- dend_ggplot 
+  # 
+  # 
+  # 
+  # +
+  #   + 
+  #   theme(axis.line.y=element_blank(),
+  #         axis.ticks.y=element_blank(),
+  #         axis.text.y=element_blank(),
+  #         axis.title.y=element_blank(),
+  #         panel.background=element_rect(fill="white"),
+  #         panel.grid=element_blank(),
+  #         plot.margin = margin(0,1,0,0, 'cm')
+  #   )
+
+
+  # ggplot() + 
+  #   geom_segment(data=dend_segs, 
+  #                aes(x=x, y=y, xend=xend, yend=yend)) +
+  #   scale_y_reverse(name="Gower's distance") + 
+  #   coord_flip(ylim=c(limits=c(max(dend_segs$yend), min(hori_segs$yend))),
+  #              clip='on') + 
+  #   theme(axis.line.y=element_blank(),
+  #         axis.ticks.y=element_blank(),
+  #         axis.text.y=element_blank(),
+  #         axis.title.y=element_blank(),
+  #         panel.background=element_rect(fill="white"),
+  #         panel.grid=element_blank(),
+  #         plot.margin = margin(0,1,0,0, 'cm')
+  #   )
+  
+  
 #   ggplot(ggdendro) +
 #     scale_y_reverse() +
 #     labs(x="Gower's distance", y='Gauge number') +

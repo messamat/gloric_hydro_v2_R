@@ -369,11 +369,11 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
 }
 #------ prettydend_classes ----------------------------------------------------
 #Make a nice looking dendogram based on a clustering output
-prettydend_classes <- function(in_hclus, colorder=NULL, 
+prettydend_classes <- function(in_hclust, colorder=NULL, 
                                in_colors=NULL, in_labels=NULL,
                                in_kclass=7, classnames = NULL) {
   
-  classr <- dendextend::cutree(in_hclus, k=in_kclass, 
+  classr <- dendextend::cutree(in_hclust, k=in_kclass, 
                                order_clusters_as_data = FALSE)
   classr_df <- data.frame(ID=names(classr), gclass=classr) 
   
@@ -385,14 +385,14 @@ prettydend_classes <- function(in_hclus, colorder=NULL,
   }
   
   if (!is.null(in_labels)) {
-    in_hclus$labels <- in_labels
+    in_hclust$labels <- in_labels
   }
   
   if (is.null(colorder)) colorder = 1:in_kclass
   
   # Choose the appropriate value for h based on the heights
-  chosen_h <- in_hclus$height[length(in_hclus$height) - (in_kclass-1)]
-  dendname_cut <- as.dendrogram(in_hclus) %>%
+  chosen_h <- in_hclust$height[length(in_hclust$height) - (in_kclass-1)]
+  dendname_cut <- as.dendrogram(in_hclust) %>%
     cut(h=chosen_h)
 
   #Get a basic dendrogram with the right colors
@@ -426,7 +426,7 @@ prettydend_classes <- function(in_hclus, colorder=NULL,
   
   #Format ggplot
   ggdendro_p_format <- ggplot(ggdendro_p) +
-    scale_y_reverse(name="Gower's distance")   + 
+    scale_y_reverse(name="Euclidean distance")   + 
     geom_rect(data=rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
               fill='white') +
     geom_text(data = new_classlabels, 
@@ -1845,7 +1845,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
 # in_metastats_dt <- tar_read(metastats_dt)
 # in_metastats_analyzed <- tar_read(metastats_analyzed)
 # in_gaugep_dt <- tar_read(gaugep_dt)
-# max_interp_sel = 10
+# max_interp_sel = 5
 # max_miss_sel = 0
 # min_nyears = 15
 # q_thresh = 0.001
@@ -1868,7 +1868,7 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
     grdc_no]
   
   
-  qstats_dt <- future_lapply(gauges_sel_no, function(in_no) {
+  qstats_dt <- lapply(gauges_sel_no, function(in_no) {
     print(in_no)
     #For given gauge, get years with less than the maximum number of missing days
     #given maximum interpolation period
@@ -2042,77 +2042,95 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   
 
   #Compute Gower's distance based on correlation coefficients and variable weights
-  gowdist <- cluster::daisy(
+  hydro_dist <- cluster::daisy(
     hydrostats_mat, 
-    metric = "gower",
-    weights = hydrostats_order$weight) %>%
+    metric = "euclidean") %>%
     as.dist
+  #weights = hydrostats_order$weight #not worth bothering with weighting given 
+  #that weights only range from 0.25 to 0.33
   
   #
   #Cluster departments based on UPGMA or Ward's---------------------------------
-  hclust_avg <- hclust(gowdist, method='average')
-  hclust_ward <- hclust(gowdist, method='ward.D')
-  hclust_ward2 <- hclust(gowdist, method='ward.D2')
+  rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
+                                     dist_name="Euclidean distance"
+                                     ) {
+    print(in_method)
+    hclust_res <- hclust(in_dist, method=in_method)
+    
+    #Compute cophenetic correlation --------------------------------------------
+    cophcor <- cor(in_dist, cophenetic(hclust_res))
+
+    dist_cophcor_dt <- merge(
+      reshape2::melt(as.matrix(in_dist)),
+      reshape2::melt(as.matrix(cophenetic(hclust_res))),
+      by=c('Var1', 'Var2')) %>%
+      setnames(c('value.x', 'value.y'), 
+               c(dist_name, "Cophenetic dissimilarity"))
+    
+    #Plot cophenetic correlation------------------------------------------------
+    p_cophcor <- ggplot(dist_cophcor_dt, 
+                            aes(x=get(dist_name), y=`Cophenetic dissimilarity`)) +
+      geom_point() +
+      geom_smooth(method='lm') +
+      annotate('text', x = 0.5, y=0.1,
+               label=paste('Cophenetic correlation =', 
+                           round(cophcor, 2))) +
+      coord_cartesian(
+        expand=F, 
+        ylim=c(0, max(dist_cophcor_dt$`Cophenetic dissimilarity`)+0.05)) +
+      theme_classic()
+    
+    #Mantel test ---------------------------------------------------------------
+    clust_mantel <- vegan::mantel(
+      xdis = in_dist,
+      ydis = cophenetic(hclust_res),
+      method = "pearson",
+      permutations = 999
+    )
+    
+    #Graph scree plot ----------------------------------------------------------
+    scree_dt <- data.table(height=hclust_res$height,
+                               groups=length(hclust_res$height):1)
+    
+    p_scree <- ggplot(scree_dt,
+                      aes(x=groups, y=height)) +
+      geom_point() +
+      geom_line() + 
+      scale_x_log10(breaks=c(1,5,10,20,50,100,max(scree_dt$groups))) +
+      theme_bw()
+    
+    #Agglomerative coefficient -------------------------------------------------
+    if (in_method!='median') {
+      ag_coef <- coef.hclust(hclust_res)
+    }
+    
+    #NbClust to determine number of clusters -----------------------------------
+    nbclust_tests <- NbClust(data=in_mat, distance='euclidean',
+                             min.nc=min_nc, max.nc=max_nc, method=in_method)
   
-  #Keep UPGMA based on cophcor
-  cophcor_avg <- cor(gowdist, cophenetic(hclust_avg))
-  cophcor_ward <- cor(gowdist, cophenetic(hclust_ward))
-  cophcor_ward2 <- cor(gowdist, cophenetic(hclust_ward2))
+    return(list(
+      hclust=hclust_res,
+      cophcor = cophcor,
+      p_cophcor = p_cophcor,
+      ag_coef = ag_coef,
+      scree_dt = scree_dt,
+      p_scree = p_scree,
+      clust_mantel = clust_mantel,
+      nbclust_tests = nbclust_tests
+    ))
+  }
   
-  dist_cophcor_dt_avg <- merge(
-    reshape2::melt(as.matrix(gowdist)),
-    reshape2::melt(as.matrix(cophenetic(hclust_avg))),
-    by=c('Var1', 'Var2')) %>%
-    setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
-  
-  #Plot cophenetic correlation--------------------------------------------------
-  p_cophcor_avg <- ggplot(dist_cophcor_dt_avg, 
-                          aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
-    geom_point() +
-    geom_smooth(method='lm') +
-    annotate('text', x = 0.5, y=0.1,
-             label=paste('Cophenetic correlation =', 
-                         round(cophcor_avg, 2))) +
-    coord_cartesian(expand=F, 
-                ylim=c(0, max(dist_cophcor_dt_avg$`Cophenetic dissimilarity`)+0.05)) +
-    theme_classic()
-  
-  dist_cophcor_dt_ward <- merge(
-    reshape2::melt(as.matrix(gowdist)),
-    reshape2::melt(as.matrix(cophenetic(hclust_ward))),
-    by=c('Var1', 'Var2')) %>%
-    setnames(c('value.x', 'value.y'), c("Gower's distance", "Cophenetic dissimilarity"))
-  
-  #Plot cophenetic correlation
-  p_cophcor_ward <- ggplot(dist_cophcor_dt_ward, 
-                           aes(x=`Gower's distance`, y=`Cophenetic dissimilarity`)) +
-    geom_point() +
-    geom_smooth(method='lm') +
-    annotate('text', x = 0.5, y=0.1,
-             label=paste('Cophenetic correlation =', 
-                         round(cophcor_ward, 2))) +
-    coord_cartesian(expand=F, 
-                    ylim=c(0, max(dist_cophcor_dt_ward$`Cophenetic dissimilarity`)+0.05)) +
-    theme_classic()
-  
-  #Graph scree plot ------------------------------------------------------------
-  scree_dt_avg <- data.table(height=hclust_avg$height,
-                             groups=length(hclust_avg$height):1)
-  
-  p_scree_avg <- ggplot(scree_dt_avg,
-                        aes(x=groups, y=height)) +
-    geom_point() +
-    geom_line() + 
-    theme_classic()
-  
-  scree_dt_ward <- data.table(height=hclust_ward$height,
-                              groups=length(hclust_ward$height):1)
-  
-  p_scree_ward <- ggplot(scree_dt_ward,
-                         aes(x=groups, y=height)) +
-    geom_point() +
-    geom_line() + 
-    theme_classic()
+  algo_list <- list('average', 'median', 'ward.D', 'ward.D2')
+  hclust_reslist <- lapply(
+    algo_list, function(in_method) {
+    rundiagnose_clustering(
+      in_mat = hydrostats_mat,
+      in_dist = hydro_dist,
+      in_method = in_method,
+      min_nc = 5,
+      max_nc = 15)
+  })
+  names(hclust_reslist) <- algo_list
   
   #Define class colors------------------------------------------------------------
   #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
@@ -2123,12 +2141,13 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   
   
   #Make table of gauge classes and good looking dendogram-----------------------
-  cuttree_and_visualize <- function(in_hclus, in_kclass, in_colors, 
+  cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors, 
                                     in_meltdt, id_col, 
                                     value_col='value', variable_col='variable',
                                     aspect_col = 'aspect', classnames= NULL) {
     
-    dendo_format <-prettydend_classes(in_hclus = in_hclus, 
+    #Get dendrogram and class membership
+    dendo_format <-prettydend_classes(in_hclust = in_hclust, 
                               in_kclass=in_kclass, in_colors=in_colors,
                               classnames= NULL)
     
@@ -2137,8 +2156,41 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
     
     levels(class_stats$variable)
     
+
+    #Test classification significance ------------------------------------------
+    mat_dt <- in_mat %>%
+      as.data.table %>%
+      .[, (id_col) := rownames(in_mat)] %>%
+      merge(dendo_format$classes, 
+            by.x=id_col, by.y='ID') 
+    
+    # mshapirotest_classes <- lapply(
+    #   mat_dt[, .N, by=gclass][N>=3, gclass], 
+    #   function(in_gclass) {
+    #     #print(in_gclass)
+    #     subdt <- mat_dt[gclass==in_gclass,]
+    #     
+    #     #Replace NA values
+    #     subdt[, (names(subdt)) := sapply(
+    #       .SD, function(x) zoo::na.aggregate(x), simplify=F)]
+    #     
+    #     mat <- as.matrix(subdt[
+    #       , -c(id_col, names(subdt)[!subdt[, sapply(.SD, uniqueN)] > 1]), 
+    #       with=F])
+    #     rownames(mat) <- subdt[, get(id_col)]
+    #     return(list(
+    #       gclass=in_gclass,
+    #       shapiro_test=mvnormtest::mshapiro.test(mat)
+    #     ))
+    #   })
+    
+    #MANOVA
+    
+    #Compute significance for each statistic
+    
+    #Get box plot
     p_cluster_boxplot <- ggplot(
-      class_stats, 
+      iclass_stats, 
       aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
       geom_jitter(size=0.4, alpha=0.5) +
       geom_boxplot(outlier.shape = NA) +
@@ -2160,10 +2212,10 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
     )
   }
   
-  nclass_list <- c(8, 12)
+  nclass_list <- c(5, 9)
   cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
-      in_hclus = hclust_avg,
+      in_hclust = hclust_reslist$average$hclust,
       in_kclass = kclass,
       in_colors = classcol, 
       in_meltdt = hydrostats_dt,
@@ -2203,12 +2255,12 @@ export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
 
 #------ Visualize hydrographs --------------------------------------------------
 
-
+#------ Analyze cluster sensitivity --------------------------------------------
 # analyze_cluster_sensitivity <- function(in_cluster) {
 #   #Permute each variable
 #   #Remove each gauge
 #   
-#   #Compute correlation between clusters in terms of membership
+#   #Compute Adjusted Rand Index
 #   #Compute cophenetic correlation between trees
 #   
 # }

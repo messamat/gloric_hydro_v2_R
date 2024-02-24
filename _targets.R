@@ -255,7 +255,7 @@ list(
     compute_noflow_hydrostats_wrapper(in_metastats_analyzed=metastats_analyzed,
                                       in_metastats_dt=metastats_dt,
                                       in_gaugep_dt=gaugep_dt,
-                                      max_interp_sel = 10,
+                                      max_interp_sel = 5,
                                       max_miss_sel = 0,
                                       min_nyears = 15,
                                       q_thresh = 0.001) 

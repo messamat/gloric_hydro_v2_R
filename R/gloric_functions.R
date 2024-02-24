@@ -367,10 +367,12 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
   
   return(in_dt)
 }
+#------- prettydend_classes ----------------------------------------------------
 #Make a nice looking dendogram based on a clustering output
-prettydend <- function(hclus_out, colorder=NULL, colors=NULL, in_labels=NULL,
-                       kclass=7, classnames = NULL) {
-  classr <- dendextend::cutree(hclus_out, k=kclass, 
+prettydend_classes <- function(in_hclus, colorder=NULL, 
+                               in_colors=NULL, in_labels=NULL,
+                               in_kclass=7, classnames = NULL) {
+  classr <- dendextend::cutree(in_hclus, k=in_kclass, 
                                order_clusters_as_data = FALSE)
   classr_df <- data.frame(ID=names(classr), gclass=classr) 
   
@@ -382,24 +384,21 @@ prettydend <- function(hclus_out, colorder=NULL, colors=NULL, in_labels=NULL,
   }
   
   if (!is.null(in_labels)) {
-    hclus_out$labels <- in_labels
+    in_hclus$labels <- in_labels
   }
   
-  if (is.null(colorder)) colorder = 1:kclass
+  if (is.null(colorder)) colorder = 1:in_kclass
   
-  # Extract the heights of the branches
-  heights <- hclus_out$height
   # Choose the appropriate value for h based on the heights
-  desired_h <- kclass  # Set the desired number of clusters
-  chosen_h <- heights[length(heights) - desired_h]
-  dendname_cut <- as.dendrogram(hclus_out) %>%
+  chosen_h <- in_hclus$height[length(heights) - (in_kclass-1)]
+  dendname_cut <- as.dendrogram(in_hclus) %>%
     cut(h=chosen_h)
 
   #Get a basic dendrogram with the right colors
   ggdendro_p <- dendname_cut$upper %>%
     set("branches_lwd", 1) %>%
-    color_branches(k=kclass, col=colors[colorder]) %>%
-    color_labels(k=kclass, col='white')  %>% #Create background labels in white to create a halo
+    color_branches(k=in_kclass, col=in_colors[colorder]) %>%
+    color_labels(k=in_kclass, col='white')  %>% #Create background labels in white to create a halo
     as.ggdend
   
   #Get cutoff length
@@ -414,7 +413,7 @@ prettydend <- function(hclus_out, colorder=NULL, colors=NULL, in_labels=NULL,
   
   #Get labels to superimpose upon halo
   new_classlabels <- ggdendro_p$labels
-  new_classlabels$col <- colors[colorder]
+  new_classlabels$col <- in_colors[colorder]
   
   #Background rectangle for labels
   rect_df <- data.frame(
@@ -1907,44 +1906,30 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
 }
 
 
-#------ cluster_gauges --------------------------------------------
-#in_hydrostats <- tar_read(noflow_hydrostats)
-
-
-cluster_noflow_gauges_full <- function(in_hydrostats) {
-  #The metrics related to no-flow conditions are overrepresented in the list of 
-  # selected metrics, in accordance with the objective of characterizing flow 
-  # regime of IRES. Further transformations were applied to normalize metrics 
-  # and reduce asymmetry in empirical distributions: the metrics related to 
-  # duration medianDr, meanD, medianD, sdD were log-transformed; Qp, p = 1, 90
-  # were divided by the mean long-term annual discharge before being square-root 
-  # transformed; F0, medianN, sdN, Drec and Ic were square-root transformed. The 
-  # mean date θ was transformed to allow comparison of the timing with no-flow 
-  # conditions accounting for the shift in seasons between the two hemispheres. 
-  # The variables r × sin(θ) and r × cos(θ) were used instead of r and θ to avoid 
-  # an artificial break in winter induced by angles.
-  
+#------ preformat_hydrostats ---------------------------------------------------
+preformat_hydrostats <- function(in_hydrostats) {
   #Set statistics order and weight
   hydrostats_order <- data.table(
-   variable = c("f0", 
-                "meanD", "medianD", "sD", "d80", 
-                "meanN", "medianN","sdN",        
-                "theta", "r", "Sd6",
-                "Drec", "Ic", "bfi", "medianDr",
-                "sub0C_per","subm10C_per", "pdsi_50q", "pdsi_90q"),
-   aspect = c('Intermittence',
-              rep('Duration', 4),
-              rep('Frequency', 3),
-              rep('Timing', 3),
-              rep('Rate of change', 4),
-              rep('Climate dependence', 4)),
-   weight = c(1,
-              rep(1/4, 4),
-              rep(1/3, 3),
-              rep(1/3, 3),
-              rep(1/4, 4),
-              rep(1/4, 4)
-              )
+    variable = c("f0", 
+                 "meanD", "medianD", "sD", "d80", 
+                 "meanN", "medianN","sdN",        
+                 "theta", "r", "Sd6",
+                 "Drec", "Ic", "bfi", "medianDr",
+                 "sub0C_per","subm10C_per", "pdsi_50q", "pdsi_90q"),
+    aspect = factor(
+      c('Intermittence',
+        rep('Duration', 4),
+        rep('Frequency', 3),
+        rep('Timing', 3),
+        rep('Rate of change', 4),
+        rep('Climate dependence', 4))),
+    weight = c(1,
+               rep(1/4, 4),
+               rep(1/3, 3),
+               rep(1/3, 3),
+               rep(1/4, 4),
+               rep(1/4, 4)
+    )
   ) %>% 
     .[, var_order := .I]
   
@@ -1976,7 +1961,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats) {
   hydrostats_distrib_post_p <- ggplot(hydrostats_trans, aes(x=value_pos)) +
     geom_density() +
     facet_wrap(~variable, scales='free')
-
+  
   #Transform all variables through monotonous trans to approach normal distribution
   #Get BoxCox lambda values rounded to the nearest 0.5 for simplicity/reproduceability 
   #(i.e., these values are less likely to change than finer ones)
@@ -2005,11 +1990,32 @@ cluster_noflow_gauges_full <- function(in_hydrostats) {
     is.na(pdsi_50q),
     `:=`(pdsi_50q = median(hydrostats_scaled_cast$pdsi_50q, na.rm=T),
          pdsi_90q = median(hydrostats_scaled_cast$pdsi_90q, na.rm=T)
-         )]
+    )]
   
   hydrostats_mat <- as.matrix(hydrostats_scaled_cast[,-c('I'), with=F])
   row.names(hydrostats_mat) <- id_dt[order(I), grdc_no]
   
+  # The variables r × sin(θ) and r × cos(θ) were used instead of r and θ to avoid 
+  # an artificial break in winter induced by angles.
+  
+  return(list(
+    meta_dt = hydrostats_order,
+    mat = hydrostats_mat)
+  )
+}
+
+#------ cluster_gauges --------------------------------------------
+#in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
+
+
+cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
+  hydrostats_order <- in_hydrostats_preformatted$meta_dt
+  hydrostats_mat <- in_hydrostats_preformatted$mat
+  hydrostats_merge <- as.data.table(hydrostats_mat) %>%
+    .[, grdc_no := rownames(hydrostats_mat)] %>%
+    melt(id.vars='grdc_no') %>%
+    merge(hydrostats_order, by='variable')
+
   #Correlation among variables  ------------------------------------------------
   var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
   
@@ -2113,8 +2119,8 @@ cluster_noflow_gauges_full <- function(in_hydrostats) {
                                     value_col='value', variable_col='variable',
                                     classnames= NULL) {
     
-    dendo_format <-prettydend(hclus_out = in_hclus, 
-                              kclass=in_kclass, colors=in_colors,
+    dendo_format <-prettydend_classes(in_hclus = in_hclus, 
+                              in_kclass=in_kclass, in_colors=in_colors,
                               classnames= NULL)
     
     class_stats <- merge(in_meltdt,  dendo_format$classes, 
@@ -2123,10 +2129,15 @@ cluster_noflow_gauges_full <- function(in_hydrostats) {
     p_cluster_boxplot <- ggplot(
       class_stats, 
       aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
-      geom_boxplot() +
-      geom_jitter(color="black", size=0.4, alpha=0.9) +
+      geom_jitter(size=0.4, alpha=0.5) +
+      geom_boxplot(outlier.shape = NA) +
+      scale_y_continuous(name='Metric value') +
+      scale_x_discrete(name='Class') +
       geom_hline(yintercept=0) +
-      facet_wrap(~get(variable_col), scales='free')
+      facet_wrap(aspect~get(variable_col), 
+                 scales='free', ncol=4) +
+      theme_bw() +
+      theme(legend.position = 'none')
     
     return(list(
       class_dt = class_stats,
@@ -2136,14 +2147,17 @@ cluster_noflow_gauges_full <- function(in_hydrostats) {
     )
   }
   
-  lapply(c(4, 10, 14), function(kclass) {
-    cluster_analyzed <- cuttree_and_visualize(
+  nclass_list <- c(4, 10, 14)
+  cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
+    cuttree_and_visualize(
       in_hclus = hclust_avg,
       in_kclass = kclass,
       in_colors = classcol, 
-      in_meltdt = merge(hydrostats_trans, id_dt, by='I'),
+      in_meltdt = hydrostats_merge,
       id_col = 'grdc_no')
   })
+  names(cluster_analyses_avg) <- paste0('ncl', nclass_list)
+  cluster_analyses_avg$ncl10$p_boxplot
 
 }
 

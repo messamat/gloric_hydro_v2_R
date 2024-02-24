@@ -248,6 +248,11 @@ list(
                                       max_miss_sel = 0,
                                       min_nyears = 15,
                                       q_thresh = 0.001) 
+  ),
+  
+  tar_target(
+    noflow_hydrostats_preformatted,
+    preformat_hydrostats(noflow_hydrostats)
   )
 )
 

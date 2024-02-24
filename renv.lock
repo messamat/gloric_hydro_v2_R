@@ -44,6 +44,26 @@
       ],
       "Hash": "77b5189f5272ae2b21e3ac2175ad107c"
     },
+    "EflowStats": {
+      "Package": "EflowStats",
+      "Version": "5.2.0",
+      "Source": "GitHub",
+      "RemoteType": "github",
+      "RemoteHost": "api.github.com",
+      "RemoteRepo": "EflowStats",
+      "RemoteUsername": "doi-usgs",
+      "RemoteRef": "v5.2.0",
+      "RemoteSha": "84e78fc4080cdc5f7217a89789f417f0f62053a9",
+      "Requirements": [
+        "R",
+        "RcppRoll",
+        "dplyr",
+        "imputeTS",
+        "lmom",
+        "lubridate"
+      ],
+      "Hash": "e9431fb593f52bb7a74bbbeb25924ed2"
+    },
     "FactoMineR": {
       "Package": "FactoMineR",
       "Version": "2.9",
@@ -206,7 +226,7 @@
     },
     "RcppArmadillo": {
       "Package": "RcppArmadillo",
-      "Version": "0.12.6.6.1",
+      "Version": "0.12.8.0.0",
       "Source": "Repository",
       "Repository": "CRAN",
       "Requirements": [
@@ -216,7 +236,7 @@
         "stats",
         "utils"
       ],
-      "Hash": "d2b60e0a15d73182a3a766ff0a7d0d7f"
+      "Hash": "847fc78bd9f83f55696b4b016482f7ed"
     },
     "RcppEigen": {
       "Package": "RcppEigen",
@@ -240,6 +260,17 @@
         "R"
       ],
       "Hash": "a45594a00f5dbb073d5ec9f48592a08a"
+    },
+    "RcppRoll": {
+      "Package": "RcppRoll",
+      "Version": "0.3.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "Rcpp"
+      ],
+      "Hash": "84a03997fbb5acfb3c9b43bad88fea1f"
     },
     "Rttf2pt1": {
       "Package": "Rttf2pt1",
@@ -645,10 +676,10 @@
     },
     "commonmark": {
       "Package": "commonmark",
-      "Version": "1.9.0",
+      "Version": "1.9.1",
       "Source": "Repository",
       "Repository": "CRAN",
-      "Hash": "d691c61bff84bd63c383874d2d0c3307"
+      "Hash": "5d8225445acb167abf7797de48b2ee3c"
     },
     "corrplot": {
       "Package": "corrplot",
@@ -1371,6 +1402,60 @@
       ],
       "Hash": "a535d76cf92645364997a8751396d63b"
     },
+    "ggcorrplot": {
+      "Package": "ggcorrplot",
+      "Version": "0.1.4.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "ggplot2",
+        "reshape2",
+        "stats"
+      ],
+      "Hash": "aad38d027d0dd18621e213919c20a65f"
+    },
+    "ggdendro": {
+      "Package": "ggdendro",
+      "Version": "0.2.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "MASS",
+        "R",
+        "ggplot2"
+      ],
+      "Hash": "6c64efa73d60c45946a5e6e3f894fdcd"
+    },
+    "ggforce": {
+      "Package": "ggforce",
+      "Version": "0.4.2",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "MASS",
+        "R",
+        "Rcpp",
+        "RcppEigen",
+        "cli",
+        "ggplot2",
+        "grDevices",
+        "grid",
+        "gtable",
+        "lifecycle",
+        "polyclip",
+        "rlang",
+        "scales",
+        "stats",
+        "systemfonts",
+        "tidyselect",
+        "tweenr",
+        "utils",
+        "vctrs",
+        "withr"
+      ],
+      "Hash": "384b388bd9155468d2c851846ee69f9f"
+    },
     "ggnewscale": {
       "Package": "ggnewscale",
       "Version": "0.4.9",
@@ -1755,6 +1840,25 @@
       ],
       "Hash": "eef74fe28b747e52288ea9e1d3600034"
     },
+    "imputeTS": {
+      "Package": "imputeTS",
+      "Version": "3.3",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "Rcpp",
+        "forecast",
+        "ggplot2",
+        "ggtext",
+        "grDevices",
+        "magrittr",
+        "methods",
+        "stats",
+        "stinepack"
+      ],
+      "Hash": "13747dfefd62d02ff4657d4e8eec53ef"
+    },
     "isoband": {
       "Package": "isoband",
       "Version": "0.2.7",
@@ -1931,6 +2035,18 @@
         "utils"
       ],
       "Hash": "07fb0c5b727b15b0ce40feb641498e4e"
+    },
+    "lmom": {
+      "Package": "lmom",
+      "Version": "3.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "graphics",
+        "stats"
+      ],
+      "Hash": "a69348cee0766082223f1c7e2a545505"
     },
     "lmtest": {
       "Package": "lmtest",
@@ -2373,6 +2489,16 @@
       ],
       "Hash": "bd54ba8a0a5faded999a7aab6e46b374"
     },
+    "polyclip": {
+      "Package": "polyclip",
+      "Version": "1.10-6",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R"
+      ],
+      "Hash": "436542aadb70675e361cf359285af7c7"
+    },
     "polynom": {
       "Package": "polynom",
       "Version": "1.4-1",
@@ -2534,7 +2660,7 @@
     },
     "quantmod": {
       "Package": "quantmod",
-      "Version": "0.4.25",
+      "Version": "0.4.26",
       "Source": "Repository",
       "Repository": "CRAN",
       "Requirements": [
@@ -2546,7 +2672,7 @@
         "xts",
         "zoo"
       ],
-      "Hash": "d64914f80e2e0bec895a2c5740b21040"
+      "Hash": "59321b609790f8ccf92145810e4dd507"
     },
     "quantreg": {
       "Package": "quantreg",
@@ -3031,6 +3157,16 @@
       ],
       "Hash": "5b1d5b2dc0ad9de72fe994dbe205cfb6"
     },
+    "stinepack": {
+      "Package": "stinepack",
+      "Version": "1.4",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "stats"
+      ],
+      "Hash": "68f8f672193226b9e003da1338de551b"
+    },
     "stringdist": {
       "Package": "stringdist",
       "Version": "0.9.12",
@@ -3374,6 +3510,21 @@
         "vctrs"
       ],
       "Hash": "d5da786ac5a28f62ca2eb8255ad7b9f3"
+    },
+    "tweenr": {
+      "Package": "tweenr",
+      "Version": "2.0.2",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "cpp11",
+        "farver",
+        "magrittr",
+        "rlang",
+        "vctrs"
+      ],
+      "Hash": "c16efcef4c72d3bff5e65031f3f1f841"
     },
     "tzdb": {
       "Package": "tzdb",

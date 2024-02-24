@@ -367,11 +367,12 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
   
   return(in_dt)
 }
-#------- prettydend_classes ----------------------------------------------------
+#------ prettydend_classes ----------------------------------------------------
 #Make a nice looking dendogram based on a clustering output
 prettydend_classes <- function(in_hclus, colorder=NULL, 
                                in_colors=NULL, in_labels=NULL,
                                in_kclass=7, classnames = NULL) {
+  
   classr <- dendextend::cutree(in_hclus, k=in_kclass, 
                                order_clusters_as_data = FALSE)
   classr_df <- data.frame(ID=names(classr), gclass=classr) 
@@ -390,16 +391,16 @@ prettydend_classes <- function(in_hclus, colorder=NULL,
   if (is.null(colorder)) colorder = 1:in_kclass
   
   # Choose the appropriate value for h based on the heights
-  chosen_h <- in_hclus$height[length(heights) - (in_kclass-1)]
+  chosen_h <- in_hclus$height[length(in_hclus$height) - (in_kclass-1)]
   dendname_cut <- as.dendrogram(in_hclus) %>%
     cut(h=chosen_h)
 
   #Get a basic dendrogram with the right colors
   ggdendro_p <- dendname_cut$upper %>%
-    set("branches_lwd", 1) %>%
-    color_branches(k=in_kclass, col=in_colors[colorder]) %>%
-    color_labels(k=in_kclass, col='white')  %>% #Create background labels in white to create a halo
-    as.ggdend
+    dendextend::set("branches_lwd", 1) %>% #Set is also present in data.table, so important to use dendextend:: as package order varies in tar_make
+    dendextend::color_branches(k=in_kclass, col=in_colors[colorder]) %>%
+    dendextend::color_labels(k=in_kclass, col='white')  %>% #Create background labels in white to create a halo
+    dendextend::as.ggdend(.)
   
   #Get cutoff length
   dend_segs <- ggdendro_p$segments  #[segment(dendr)$y>chosen_h,]
@@ -429,8 +430,8 @@ prettydend_classes <- function(in_hclus, colorder=NULL,
     geom_rect(data=rect_df, aes(xmin=xmin, xmax=xmax, ymin=ymin, ymax=ymax),
               fill='white') +
     geom_text(data = new_classlabels, 
-              aes_string(x = "x", y = 0.94*min(hori_segs$yend), label = "label", 
-                         colour = "col", size = "cex"), 
+              aes(x = x, y = 0.94*min(hori_segs$yend), label = label, 
+                         colour = col, size = cex), 
               hjust=0, angle = 0) +
     coord_flip(ylim=c(limits=c(max(dend_segs$yend), 0.85*min(hori_segs$yend))), #min(hori_segs$yend)
                clip='on') +
@@ -1186,7 +1187,8 @@ run_qARIMA <- function(in_q_dt, in_qcol, nearg_cols, obs_bclambda, max_K) {
 # 
 # detect_outliers_ts(in_data, in_nearg_cols, arima_split=F, plot_fit=F)
 
-detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F) {
+detect_outliers_ts <- function(in_data, in_nearg_cols, run_arima = T,
+                               arima_split=F, plot_fit=F) {
   #Remove negative values
   ts_cols <- c('date', 'Qobs', 'year', 'missingdays','PDSI')
   in_data[Qobs < 0, Qobs := NA]
@@ -1204,42 +1206,47 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
     in_nearg_cols <- in_nearg_cols[[1]]
   }
   
-  #Run ARIMA model to detect potential outliers---------------------------------
-  #start <- Sys.time()
-  max_K <- ifelse((nrow(in_data)<(365.25*80)), 10, 3) 
-  qARIMA <- run_qARIMA(in_q_dt=in_data, in_qcol='Qobs_trans', 
-                       nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda,
-                       max_K=max_K)
-  #}
-  #print(Sys.time()-start)
-  #ARIMA is good at detecting sudden peaks, but classifies them all as peaks, 
-  #STL decomposition-based outlier detecting seems better at detecting 
-  #greater peakiness by season
-  
-  #Join ARIMA to dt 
-  in_data <- merge(in_data, qARIMA$fit_dt, by='date', all.x=T)
   in_data[, date := as.Date(date)] %>%
     .[, jday := as.numeric(format(date, '%j'))]
   
-  #Find differences from forecast outside of the julian day 90% interval
-  obsfitdiff_roll_dt <- lapply(seq(366), function(i) {
-    dt_processed <- in_data[
-      jday==i, 
-      list(i,
-           obsfitdiff_roll_l = .SD[(jday >= i-7) & (jday <= i +7),
-                                   quantile(obsfitdiff, 0.025, na.rm=T)],
-           obsfitdiff_roll_u = .SD[(jday >= i-7) & (jday <= i +7),
-                                   quantile(obsfitdiff, 0.975, na.rm=T)]
-      )
-    ]
-    return(dt_processed)
-  }) %>% rbindlist
-  
-  in_data <- merge(in_data, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
-    .[order(date),]
-  in_data[, arima_outlier_rolldiff := fifelse(
-    ((Qobs < fit_l99) & (obsfitdiff<0) & (obsfitdiff<(obsfitdiff_roll_l*2))) | 
-      ((Qobs > fit_u99) & (obsfitdiff>0) & (obsfitdiff>(obsfitdiff_roll_u*2))), 1, 0)]
+  #Run ARIMA model to detect potential outliers---------------------------------
+  #start <- Sys.time()
+  if (run_arima) {
+    max_K <- ifelse((nrow(in_data)<(365.25*80)), 10, 3) 
+    qARIMA <- run_qARIMA(in_q_dt=in_data, in_qcol='Qobs_trans', 
+                         nearg_cols=in_nearg_cols, obs_bclambda=obs_bclambda,
+                         max_K=max_K)
+    #}
+    #print(Sys.time()-start)
+    #ARIMA is good at detecting sudden peaks, but classifies them all as peaks, 
+    #STL decomposition-based outlier detecting seems better at detecting 
+    #greater peakiness by season
+    
+    #Join ARIMA to dt 
+    in_data <- merge(in_data, qARIMA$fit_dt, by='date', all.x=T)
+    
+    #Find differences from forecast outside of the julian day 90% interval
+    obsfitdiff_roll_dt <- lapply(seq(366), function(i) {
+      dt_processed <- in_data[
+        jday==i, 
+        list(i,
+             obsfitdiff_roll_l = .SD[(jday >= i-7) & (jday <= i +7),
+                                     quantile(obsfitdiff, 0.025, na.rm=T)],
+             obsfitdiff_roll_u = .SD[(jday >= i-7) & (jday <= i +7),
+                                     quantile(obsfitdiff, 0.975, na.rm=T)]
+        )
+      ]
+      return(dt_processed)
+    }) %>% rbindlist
+    
+    in_data <- merge(in_data, obsfitdiff_roll_dt, by.x='jday', by.y='i', all.x=T) %>%
+      .[order(date),]
+    in_data[, arima_outlier_rolldiff := fifelse(
+      ((Qobs < fit_l99) & (obsfitdiff<0) & (obsfitdiff<(obsfitdiff_roll_l*2))) | 
+        ((Qobs > fit_u99) & (obsfitdiff>0) & (obsfitdiff>(obsfitdiff_roll_u*2))), 1, 0)]
+  } else {
+    in_data[, arima_outlier_rolldiff := NA]
+  }
   
   #Detect outliers through periodic STL decomposition --------------------------
   in_data_sub <- in_data[missingdays < 90,]
@@ -1355,7 +1362,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, arima_split=F, plot_fit=F
                             missingdays, dor_interp, pop_interp, built_interp,
                             crop_interp, tmax, PDSI, Qmod, river_ice_fraction,
                             jdaymean, jdaysd, all_flags)], 
-    arima_model = qARIMA$mod,
+    arima_model = ifelse(run_arima, qARIMA$mod, NA),
     p_fit = p_fit,
     p_seasonal = p_seasonal,
     p_fit_forplotly = p_fit_forplotly
@@ -1454,7 +1461,8 @@ compute_metastatistics_util <- function(in_outliers_path, in_no) {
 }
 
 #------ compute metastatistics wrapper -----------------------------------------
-#in_outliers_output_dt <- tar_read(q_outliers_flags)
+# in_outliers_output_dt <- tar_read(q_outliers_flags)
+# unique(in_outliers_output_dt$grdc_no)
 
 compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
     out_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))[,
@@ -1466,7 +1474,7 @@ compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
   return(out_dt)
 }
   
-#------ plot_metastats -----------------------------------------------
+#------ analyze_metastats -----------------------------------------------
 #in_metastats_dt <- tar_read(metastats_dt)
 
 analyze_metastats <- function(in_metastats_dt) {
@@ -1552,8 +1560,10 @@ compute_noflow_hydrostats_util <- function(in_dt,
   #Prepare data for computing statistics -----------------------------------------
   #Uniquely identify no-flow period
   dt[, noflow_period := rleid(Qobs_interp <= q_thresh)] %>%
+    .[, noflow_periodyr := rleid(Qobs_interp <= q_thresh), by='year'] %>%
     .[Qobs_interp > q_thresh, noflow_period := NA] %>%
-    .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period]
+    .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period] %>%
+    .[!is.na(noflow_period), noflow_periodyr_dur := .N, by = noflow_periodyr]
   
   #Identify continuous blocks of 5 years
   whole_5yrblock <- dt[order(date) & !duplicated(year),] %>%
@@ -1756,8 +1766,8 @@ compute_noflow_hydrostats_util <- function(in_dt,
     #in chronological order (i.e., no re-ordering within continuous periods of 
     #record to minimize or maximize d80)
     d80 = .SD[!is.na(blockid), 
-              fifelse(sum(!is.na(noflow_period_dur)) > 0,
-                      max(noflow_period_dur, na.rm=T), 0)
+              fifelse(sum(!is.na(noflow_periodyr_dur)) > 0,
+                      max(noflow_periodyr_dur, na.rm=T), 0)
               , by=blockid][, ceiling(quantile(V1, 0.8))],
     
     #Frequency
@@ -1911,27 +1921,28 @@ preformat_hydrostats <- function(in_hydrostats) {
   #Set statistics order and weight
   hydrostats_order <- data.table(
     variable = c("f0", 
-                 "meanD", "medianD", "sD", "d80", 
-                 "meanN", "medianN","sdN",        
-                 "theta", "r", "Sd6",
+                 "meanN", "medianN","sdN",   
+                 "meanD", "medianD", "sD", "d80",
                  "Drec", "Ic", "bfi", "medianDr",
-                 "sub0C_per","subm10C_per", "pdsi_50q", "pdsi_90q"),
-    aspect = factor(
-      c('Intermittence',
-        rep('Duration', 4),
-        rep('Frequency', 3),
-        rep('Timing', 3),
-        rep('Rate of change', 4),
-        rep('Climate dependence', 4))),
+                 "sub0C_per","subm10C_per", "pdsi_50q", "pdsi_90q",
+                 "theta", "r", "Sd6"),
+    aspect = c('Intermittence',
+               rep('Frequency', 3),
+               rep('Duration', 4),
+               rep('Rate of change', 4),
+               rep('Climate dependence', 4),
+               rep('Timing', 3)),
     weight = c(1,
-               rep(1/4, 4),
-               rep(1/3, 3),
                rep(1/3, 3),
                rep(1/4, 4),
-               rep(1/4, 4)
+               rep(1/4, 4),
+               rep(1/4, 4),
+               rep(1/3, 3)
     )
   ) %>% 
-    .[, var_order := .I]
+    .[, var_order := .I] %>%
+    .[, `:=`(variable = factor(variable, levels=variable),
+             aspect = factor(aspect, levels=unique(aspect)))]
   
   #Pre-format statistics -------------------------------------------------------
   id_dt <- in_hydrostats[f0>0, .(grdc_no, .I)]
@@ -1999,7 +2010,7 @@ preformat_hydrostats <- function(in_hydrostats) {
   # an artificial break in winter induced by angles.
   
   return(list(
-    meta_dt = hydrostats_order,
+    dt = merge(hydrostats_trans, id_dt, by='I'),
     mat = hydrostats_mat)
   )
 }
@@ -2007,14 +2018,12 @@ preformat_hydrostats <- function(in_hydrostats) {
 #------ cluster_gauges --------------------------------------------
 #in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 
-
 cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
-  hydrostats_order <- in_hydrostats_preformatted$meta_dt
+  hydrostats_dt <- in_hydrostats_preformatted$dt
+  hydrostats_order <- in_hydrostats_preformatted$dt[
+    !duplicated(variable),
+    .(variable, aspect, weight, var_order)]
   hydrostats_mat <- in_hydrostats_preformatted$mat
-  hydrostats_merge <- as.data.table(hydrostats_mat) %>%
-    .[, grdc_no := rownames(hydrostats_mat)] %>%
-    melt(id.vars='grdc_no') %>%
-    merge(hydrostats_order, by='variable')
 
   #Correlation among variables  ------------------------------------------------
   var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
@@ -2117,7 +2126,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   cuttree_and_visualize <- function(in_hclus, in_kclass, in_colors, 
                                     in_meltdt, id_col, 
                                     value_col='value', variable_col='variable',
-                                    classnames= NULL) {
+                                    aspect_col = 'aspect', classnames= NULL) {
     
     dendo_format <-prettydend_classes(in_hclus = in_hclus, 
                               in_kclass=in_kclass, in_colors=in_colors,
@@ -2125,6 +2134,8 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
     
     class_stats <- merge(in_meltdt,  dendo_format$classes, 
                          by.x=id_col, by.y='ID') 
+    
+    levels(class_stats$variable)
     
     p_cluster_boxplot <- ggplot(
       class_stats, 
@@ -2134,7 +2145,9 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
       scale_y_continuous(name='Metric value') +
       scale_x_discrete(name='Class') +
       geom_hline(yintercept=0) +
-      facet_wrap(aspect~get(variable_col), 
+      facet_wrap(factor(get(variable_col),
+                            levels=levels(class_stats[[variable_col]]))
+                 ~get(aspect_col), 
                  scales='free', ncol=4) +
       theme_bw() +
       theme(legend.position = 'none')
@@ -2147,19 +2160,49 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
     )
   }
   
-  nclass_list <- c(4, 10, 14)
+  nclass_list <- c(8, 12)
   cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
       in_hclus = hclust_avg,
       in_kclass = kclass,
       in_colors = classcol, 
-      in_meltdt = hydrostats_merge,
+      in_meltdt = hydrostats_dt,
       id_col = 'grdc_no')
   })
   names(cluster_analyses_avg) <- paste0('ncl', nclass_list)
-  cluster_analyses_avg$ncl10$p_boxplot
-
+  
+  return(list(
+    cluster_analyses = cluster_analyses_avg,
+    p_scree_avg = p_scree_avg,
+    chosen_hclust = hclust_avg
+  ))
 }
+
+#------ Export gauge classes ---------------------------------------------------
+# in_noflow_clusters <- tar_read(noflow_clusters)
+# in_path_gaugep <- tar_read(path_gaugep)
+# kclass <- 12
+# out_shp <- file.path(resdir, paste0(
+#   'gaugep_classstats_avg', kclass, '.shp'))
+
+export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
+                                  kclass, out_shp_root) {
+  out_shp <- paste0(out_shp_root, kclass, '.shp')
+  gaugep <- terra::vect(dirname(in_path_gaugep), layer=basename(in_path_gaugep))
+  cluster_analyses <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]
+  
+  class_dt <- cluster_analyses$class_dt
+  class_cast <- data.table::dcast(class_dt, grdc_no+gclass~variable, value.var = 'value')
+  
+  gaugep_classstats <- terra::merge(gaugep, class_cast, by='grdc_no', all.x=F)
+  
+  terra::writeVector(gaugep_classstats, out_shp, overwrite=T)
+  return(out_shp)
+}
+
+
+#------ Visualize hydrographs --------------------------------------------------
+
 
 # analyze_cluster_sensitivity <- function(in_cluster) {
 #   #Permute each variable

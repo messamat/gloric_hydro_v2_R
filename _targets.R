@@ -193,8 +193,18 @@ list(
                ) %>% rbindlist(., fill=T)
   ),
   
+  tar_target(
+    gauges_for_qc,
+    {terra::vect(dirname(path_gaugep), layer=basename(path_gaugep)) %>%
+        terra::merge(data_for_qc[potential_npr==T & integer_perc<0.95,],
+              by='grdc_no') %>%
+        terra::writeVector(filename=file.path(resdir, 'gaugesp_for_qc.shp'), 
+                           overwrite=T)
+    }
+  ),
+  
   tar_target(q_outliers_flags,
-             lapply(
+             future_lapply(
                data_for_qc[potential_npr==T & integer_perc<0.95, grdc_no], 
                function(in_no) {
                  print(in_no)
@@ -208,11 +218,12 @@ list(
                                           basename(qs_path))
                                      )
                  
-                 overwrite=F
+                 overwrite=T
                  if (!file.exists(out_qs) | overwrite) {
                    out_flags <- detect_outliers_ts(
                      in_data=qread(qs_path),
-                     in_nearg_cols=nearg_cols_sel)
+                     in_nearg_cols=nearg_cols_sel,
+                     run_arima = F)
                    
                    qsave(out_flags$outliers_dt, out_qs)
 
@@ -252,7 +263,23 @@ list(
   
   tar_target(
     noflow_hydrostats_preformatted,
-    preformat_hydrostats(noflow_hydrostats)
+    preformat_hydrostats(in_hydrostats = noflow_hydrostats)
+  ),
+  
+  tar_target(
+    noflow_clusters,
+    cluster_noflow_gauges_full(in_hydrostats_preformatted=
+                                 noflow_hydrostats_preformatted)
+  ),
+  
+  
+  tar_target(
+    out_gaugesp_path,
+    export_gauges_classes(in_noflow_clusters=noflow_clusters,
+                          in_path_gaugep =path_gaugep,
+                          kclass=12,
+                          out_shp_root=file.path(resdir, 'gaugep_classstats_avg')
+    )
   )
 )
 

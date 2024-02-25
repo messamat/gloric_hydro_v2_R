@@ -2302,11 +2302,64 @@ export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
 }
 
 
-#------ Visualize hydrographs --------------------------------------------------
-plot_class_hydrograph <- function() {
+#------ Plot class hydrograph wrapper --------------------------------------------------
+in_noflow_clusters= tar_read(noflow_clusters)
+in_metastats_dt <- tar_read(metastats_dt)
+
+plot_class_hydrograph_wrapper <- function(in_noflow_clusters,
+                                          in_metastats_dt,
+                                          max_interp_sel,
+                                          max_miss_sel
+                                          ) {
+  kclass <- in_noflow_clusters$kclass
+  #in_noflow_clusters$hclust_reslist_all[[in_noflow_clusters$chosen_hclust]]
+  cluster_analyses <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]
+  
+  class_dt_sub <- cluster_analyses$class_dt[gclass==1,] %>%
+    .[!duplicated(grdc_no), .(grdc_no, gclass, classn)]
   
 }
 
+#------ Plot class hydrograph --------------------------------------------------
+in_class_dt <- class_dt_sub
+in_no <- '3649455'
+max_interp_sel = 5
+max_miss_sel = 0
+
+plot_class_hydrograph <- function(in_class_dt, in_metastats_dt,
+                                  max_interp_sel,
+                                  max_miss_sel) {
+  
+  interp_fn <- paste0('missingdays_edit',
+                      fifelse(max_interp_sel >0,
+                              paste0('_interp', max_interp_sel),
+                              '')
+  )
+  
+  q_dt_bind <- lapply(in_class_dt$grdc_no, function(in_no) {
+    print(in_no)
+    #For given gauge, get years with less than the maximum number of missing days
+    #given maximum interpolation period
+    meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
+                                    & get(interp_fn)<=max_miss_sel,]
+    
+    #Read data, keeping only years with number of missing days under threshold
+    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
+      .[year %in% meta_sub_yrs$year, 
+        .(grdc_no, date, jday, Qobs, tmax)] %>%#subset columns for speed
+      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
+      .[!duplicated(date),] 
+    
+    return(q_dt)
+  }) %>% rbindlist
+  
+  
+}
+
+#------ Plot hydrograph --------------------------------------------------
+plot_hydrograph <- function() {
+  
+}
 
 #------ Analyze cluster sensitivity --------------------------------------------
 # analyze_cluster_sensitivity <- function(in_cluster) {

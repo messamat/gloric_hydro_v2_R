@@ -2511,22 +2511,6 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
   return(classhydro_facet)
 }
 
-
-#------ fast_cluster -----------------------------------------------------------
-fast_cluster_compare <- function(in_mat, in_method, in_kclass, comp_clust) {
-  hydro_dist <- cluster::daisy(
-    in_mat, 
-    metric = "euclidean") %>%
-    as.dist
-  
-  new_clust <- fastcluster::hclust(hydro_dist, method=in_method) %>%
-    cutree(k=in_kclass)
-  
-  out_ari <- aricode::ARI(comp_clust, new_clust)
-
-  return(out_ari)
-}
-
 #------ Analyze cluster sensitivity --------------------------------------------
 in_noflow_clusters <- tar_read(noflow_clusters)
 in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
@@ -2552,14 +2536,19 @@ analyze_cluster_sensitivity <- function(in_cluster,
     mat_permut[,col_ix] <- mat_permut[
       sample(rows_ix, size=length(rows_ix), replace=FALSE),col_ix] 
     
-    fast_cluster_compare(in_mat=mat_permut,
-                         in_method=in_method,
-                         in_kclass=in_kclass,
-                         comp_clust=comp_clust)
+    hydro_dist <- cluster::daisy(
+      mat_permut, 
+      metric = "euclidean") %>%
+      as.dist
+    
+    new_clust <- fastcluster::hclust(hydro_dist, method=in_method) %>%
+      cutree(k=in_kclass)
+    
+    out_ari <- aricode::ARI(comp_clust, new_clust)
   }
   
   hydrostats_ari <- future_lapply(cols_ix, function(col_to_permute) {
-    ari_list <- replicate(100, get_col_ARI(in_mat=hydrostats_mat,
+    ari_list <- replicate(500, get_col_ARI(in_mat=hydrostats_mat,
                                            col_ix=col_to_permute,
                                            rows_ix=rows_ix,
                                            in_method=in_noflow_clusters$chosen_hclust,
@@ -2575,10 +2564,27 @@ analyze_cluster_sensitivity <- function(in_cluster,
     .[, var := factor(var, levels=.SD[order(mean_ari), unique(var)])]
 
   #---------------- Compute stability against single-gauge removal  ------------
+  boot_clust <- fpc::clusterboot(
+    data= as.dist(cluster::daisy(
+      hydrostats_mat, 
+      metric = "euclidean")),
+    B=100,
+    bootmethod = 'boot',
+    clustermethod = disthclustCBI,
+    k=kclass, 
+    cut="number", 
+    method="average",
+    showplots=TRUE
+  )
   
-
+  boot_clust$bootmean
+  boot_clust$bootbrd
+  boot_clust$bootrecover
   
-    
+  #clusters with a stability value less than 0.6 should be considered unstable. 
+  #Values between 0.6 and 0.75 indicate that the cluster is measuring a pattern 
+  #in the data, but there isn’t high certainty about which points should be 
+  #clustered together
     
   }
 

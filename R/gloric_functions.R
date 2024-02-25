@@ -2015,6 +2015,193 @@ preformat_hydrostats <- function(in_hydrostats) {
   )
 }
 
+#------ rundiagnose_clustering ------------------------------------------------
+rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
+                                   dist_name="Euclidean distance"
+) {
+  print(in_method)
+  hclust_res <- hclust(in_dist, method=in_method)
+  
+  #Compute cophenetic correlation --------------------------------------------
+  cophcor <- cor(in_dist, cophenetic(hclust_res))
+  
+  dist_cophcor_dt <- merge(
+    reshape2::melt(as.matrix(in_dist)),
+    reshape2::melt(as.matrix(cophenetic(hclust_res))),
+    by=c('Var1', 'Var2')) %>%
+    setnames(c('value.x', 'value.y'), 
+             c(dist_name, "Cophenetic dissimilarity"))
+  
+  #Plot cophenetic correlation------------------------------------------------
+  p_cophcor <- ggplot(dist_cophcor_dt, 
+                      aes(x=get(dist_name), y=`Cophenetic dissimilarity`)) +
+    geom_point() +
+    geom_smooth(method='lm') +
+    annotate('text', x = 0.5, y=0.1,
+             label=paste('Cophenetic correlation =', 
+                         round(cophcor, 2))) +
+    coord_cartesian(
+      expand=F, 
+      ylim=c(0, max(dist_cophcor_dt$`Cophenetic dissimilarity`)+0.05)) +
+    theme_classic()
+  
+  #Mantel test ---------------------------------------------------------------
+  clust_mantel <- vegan::mantel(
+    xdis = in_dist,
+    ydis = cophenetic(hclust_res),
+    method = "pearson",
+    permutations = 999
+  )
+  
+  #Graph scree plot ----------------------------------------------------------
+  scree_dt <- data.table(height=hclust_res$height,
+                         groups=length(hclust_res$height):1)
+  
+  p_scree <- ggplot(scree_dt,
+                    aes(x=groups, y=height)) +
+    geom_point() +
+    geom_line() + 
+    scale_x_log10(breaks=c(1,5,10,20,50,100,max(scree_dt$groups))) +
+    theme_bw()
+  
+  #Agglomerative coefficient -------------------------------------------------
+  if (in_method !='median') {
+    ag_coef <- coef.hclust(hclust_res)
+  } else {
+    ag_coef <- NA
+  }
+  
+  #NbClust to determine number of clusters -----------------------------------
+  nbclust_tests <- NbClust(data=in_mat, distance='euclidean',
+                           min.nc=min_nc, max.nc=max_nc, method=in_method)
+  
+  return(list(
+    hclust=hclust_res,
+    cophcor = cophcor,
+    p_cophcor = p_cophcor,
+    ag_coef = ag_coef,
+    scree_dt = scree_dt,
+    p_scree = p_scree,
+    clust_mantel = clust_mantel,
+    nbclust_tests = nbclust_tests
+  ))
+}
+
+#------ cuttree_and_visualize --------------------------------------------------
+cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors, 
+                                  in_meltdt, id_col, 
+                                  value_col='value', variable_col='variable',
+                                  aspect_col = 'aspect', classnames= NULL) {
+  
+  #Get dendrogram and class membership
+  dendo_format <-prettydend_classes(in_hclust = in_hclust, 
+                                    in_kclass=in_kclass, in_colors=in_colors,
+                                    classnames= NULL)
+  
+  class_stats <- dendo_format$classes %>%
+    as.data.table %>%
+    .[, classn := .N, by='gclass'] %>%
+    merge(in_meltdt, ., by.x=id_col, by.y='ID') %>%
+    .[, gclass := factor(gclass, levels=sort(unique(gclass)))]
+  
+  #Test classification significance ------------------------------------------
+  mat_dt <- in_mat %>%
+    as.data.table %>%
+    .[, (id_col) := rownames(in_mat)] %>%
+    merge(dendo_format$classes, 
+          by.x=id_col, by.y='ID') 
+  
+  #Check if classes are multivariate normal
+  mshapirotest_classes <- lapply(
+    mat_dt[, .N, by=gclass][N>=20, gclass],
+    function(in_gclass) {
+      #print(in_gclass)
+      subdt <- mat_dt[gclass==in_gclass,]
+      
+      #Replace NA values
+      subdt[, (names(subdt)) := sapply(
+        .SD, function(x) suppressWarnings(zoo::na.aggregate(x)), simplify=F)]
+      
+      mat <- as.matrix(subdt[
+        , -c(id_col, names(subdt)[!subdt[, sapply(.SD, uniqueN)] > 1]),
+        with=F])
+      rownames(mat) <- subdt[, get(id_col)]
+      
+      
+      varcormat <- cor(mat)
+      varcormat[lower.tri(varcormat)] <- NA
+      
+      vartoremove <- reshape2::melt(varcormat) %>%
+        as.data.table %>%
+        .[Var1 != Var2,] %>%
+        .[abs(value) > 0.98, as.character(Var2)]
+      
+      if (length(vartoremove)>1) {
+        sub_mat <- mat[, -which(colnames(mat) %in% vartoremove)]
+      } else {
+        sub_mat <- mat
+      }
+      
+      shapiro_test <- t(sub_mat) %>%
+        mvnormtest::mshapiro.test()
+      
+      return(list(
+        gclass=in_gclass,
+        shapiro_test=shapiro_test)
+      )
+    })
+  
+  #Test significant difference by stat
+  # set up model
+  diff_letters <- lapply(unique(class_stats$variable), function(var) {
+    sub_dat <- class_stats[variable==var,]
+    
+    emmeans(lm(as.formula(paste(value_col, '~ gclass')), 
+               data = sub_dat),
+            specs = as.formula('~ gclass') 
+    ) %>%
+      cld(adjust = "sidak",
+          Letters = letters,
+          alpha = 0.05) %>%
+      as.data.table %>%
+      .[, variable := var]  %>%
+      setnames('.group', 'grp_letter')
+  }) %>% 
+    rbindlist %>%
+    merge(class_stats[!duplicated(paste0(variable, gclass)),
+                      .(variable, aspect, gclass, classn)], 
+          by=c('variable', 'gclass')) 
+  
+  #Get box plot
+  p_cluster_boxplot <- ggplot(
+    class_stats, 
+    aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    facet_wrap(factor(get(variable_col),
+                      levels=levels(class_stats[[variable_col]]))
+               ~get(aspect_col), 
+               scales='free', ncol=4) +
+    geom_text(data=diff_letters[classn > 1,], 
+              aes(x=gclass, label=grp_letter, y=emmean), 
+              color='black', alpha=0.6) +
+    scale_y_continuous(name='Metric value') +
+    scale_x_discrete(name='Class') +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') + 
+    theme_bw() +
+    theme(legend.position = 'none',
+          panel.grid = element_blank())
+  
+  return(list(
+    class_dt = class_stats,
+    p_dendo = dendo_format$plot,
+    p_boxplot = p_cluster_boxplot,
+    class_stats = diff_letters
+  )
+  )
+}
+
 #------ cluster_gauges --------------------------------------------
 #in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 
@@ -2051,75 +2238,6 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   
   #
   #Cluster departments based on UPGMA or Ward's---------------------------------
-  rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
-                                     dist_name="Euclidean distance"
-                                     ) {
-    print(in_method)
-    hclust_res <- hclust(in_dist, method=in_method)
-    
-    #Compute cophenetic correlation --------------------------------------------
-    cophcor <- cor(in_dist, cophenetic(hclust_res))
-
-    dist_cophcor_dt <- merge(
-      reshape2::melt(as.matrix(in_dist)),
-      reshape2::melt(as.matrix(cophenetic(hclust_res))),
-      by=c('Var1', 'Var2')) %>%
-      setnames(c('value.x', 'value.y'), 
-               c(dist_name, "Cophenetic dissimilarity"))
-    
-    #Plot cophenetic correlation------------------------------------------------
-    p_cophcor <- ggplot(dist_cophcor_dt, 
-                            aes(x=get(dist_name), y=`Cophenetic dissimilarity`)) +
-      geom_point() +
-      geom_smooth(method='lm') +
-      annotate('text', x = 0.5, y=0.1,
-               label=paste('Cophenetic correlation =', 
-                           round(cophcor, 2))) +
-      coord_cartesian(
-        expand=F, 
-        ylim=c(0, max(dist_cophcor_dt$`Cophenetic dissimilarity`)+0.05)) +
-      theme_classic()
-    
-    #Mantel test ---------------------------------------------------------------
-    clust_mantel <- vegan::mantel(
-      xdis = in_dist,
-      ydis = cophenetic(hclust_res),
-      method = "pearson",
-      permutations = 999
-    )
-    
-    #Graph scree plot ----------------------------------------------------------
-    scree_dt <- data.table(height=hclust_res$height,
-                               groups=length(hclust_res$height):1)
-    
-    p_scree <- ggplot(scree_dt,
-                      aes(x=groups, y=height)) +
-      geom_point() +
-      geom_line() + 
-      scale_x_log10(breaks=c(1,5,10,20,50,100,max(scree_dt$groups))) +
-      theme_bw()
-    
-    #Agglomerative coefficient -------------------------------------------------
-    if (in_method!='median') {
-      ag_coef <- coef.hclust(hclust_res)
-    }
-    
-    #NbClust to determine number of clusters -----------------------------------
-    nbclust_tests <- NbClust(data=in_mat, distance='euclidean',
-                             min.nc=min_nc, max.nc=max_nc, method=in_method)
-  
-    return(list(
-      hclust=hclust_res,
-      cophcor = cophcor,
-      p_cophcor = p_cophcor,
-      ag_coef = ag_coef,
-      scree_dt = scree_dt,
-      p_scree = p_scree,
-      clust_mantel = clust_mantel,
-      nbclust_tests = nbclust_tests
-    ))
-  }
-  
   algo_list <- list('average', 'median', 'ward.D', 'ward.D2')
   hclust_reslist <- lapply(
     algo_list, function(in_method) {
@@ -2141,80 +2259,10 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   
   
   #Make table of gauge classes and good looking dendogram-----------------------
-  cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors, 
-                                    in_meltdt, id_col, 
-                                    value_col='value', variable_col='variable',
-                                    aspect_col = 'aspect', classnames= NULL) {
-    
-    #Get dendrogram and class membership
-    dendo_format <-prettydend_classes(in_hclust = in_hclust, 
-                              in_kclass=in_kclass, in_colors=in_colors,
-                              classnames= NULL)
-    
-    class_stats <- merge(in_meltdt,  dendo_format$classes, 
-                         by.x=id_col, by.y='ID') 
-    
-    levels(class_stats$variable)
-    
-
-    #Test classification significance ------------------------------------------
-    mat_dt <- in_mat %>%
-      as.data.table %>%
-      .[, (id_col) := rownames(in_mat)] %>%
-      merge(dendo_format$classes, 
-            by.x=id_col, by.y='ID') 
-    
-    # mshapirotest_classes <- lapply(
-    #   mat_dt[, .N, by=gclass][N>=3, gclass], 
-    #   function(in_gclass) {
-    #     #print(in_gclass)
-    #     subdt <- mat_dt[gclass==in_gclass,]
-    #     
-    #     #Replace NA values
-    #     subdt[, (names(subdt)) := sapply(
-    #       .SD, function(x) zoo::na.aggregate(x), simplify=F)]
-    #     
-    #     mat <- as.matrix(subdt[
-    #       , -c(id_col, names(subdt)[!subdt[, sapply(.SD, uniqueN)] > 1]), 
-    #       with=F])
-    #     rownames(mat) <- subdt[, get(id_col)]
-    #     return(list(
-    #       gclass=in_gclass,
-    #       shapiro_test=mvnormtest::mshapiro.test(mat)
-    #     ))
-    #   })
-    
-    #MANOVA
-    
-    #Compute significance for each statistic
-    
-    #Get box plot
-    p_cluster_boxplot <- ggplot(
-      iclass_stats, 
-      aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
-      geom_jitter(size=0.4, alpha=0.5) +
-      geom_boxplot(outlier.shape = NA) +
-      scale_y_continuous(name='Metric value') +
-      scale_x_discrete(name='Class') +
-      geom_hline(yintercept=0) +
-      facet_wrap(factor(get(variable_col),
-                            levels=levels(class_stats[[variable_col]]))
-                 ~get(aspect_col), 
-                 scales='free', ncol=4) +
-      theme_bw() +
-      theme(legend.position = 'none')
-    
-    return(list(
-      class_dt = class_stats,
-      p_dendo = dendo_format$plot,
-      p_boxplot = p_cluster_boxplot
-    )
-    )
-  }
-  
   nclass_list <- c(5, 9)
   cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
+      in_mat = hydrostats_mat,
       in_hclust = hclust_reslist$average$hclust,
       in_kclass = kclass,
       in_colors = classcol, 
@@ -2224,24 +2272,25 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   names(cluster_analyses_avg) <- paste0('ncl', nclass_list)
   
   return(list(
+    hclust_reslist_all = hclust_reslist,
     cluster_analyses = cluster_analyses_avg,
-    p_scree_avg = p_scree_avg,
-    chosen_hclust = hclust_avg
+    chosen_hclust = 'average',
+    kclass = 9
   ))
 }
 
 #------ Export gauge classes ---------------------------------------------------
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_path_gaugep <- tar_read(path_gaugep)
-# kclass <- 12
-# out_shp <- file.path(resdir, paste0(
-#   'gaugep_classstats_avg', kclass, '.shp'))
+# out_shp_root <- file.path(resdir, 'gaugep_classstats_avg')
 
 export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
-                                  kclass, out_shp_root) {
-  out_shp <- paste0(out_shp_root, kclass, '.shp')
+                                  out_shp_root) {
+ 
+  out_shp <- paste0(out_shp_root, in_noflow_clusters$kclass, '.shp')
   gaugep <- terra::vect(dirname(in_path_gaugep), layer=basename(in_path_gaugep))
-  cluster_analyses <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]
+  cluster_analyses <- in_noflow_clusters$cluster_analyses[[
+    paste0('ncl', in_noflow_clusters$kclass)]]
   
   class_dt <- cluster_analyses$class_dt
   class_cast <- data.table::dcast(class_dt, grdc_no+gclass~variable, value.var = 'value')
@@ -2254,6 +2303,10 @@ export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
 
 
 #------ Visualize hydrographs --------------------------------------------------
+plot_class_hydrograph <- function() {
+  
+}
+
 
 #------ Analyze cluster sensitivity --------------------------------------------
 # analyze_cluster_sensitivity <- function(in_cluster) {

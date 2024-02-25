@@ -277,7 +277,6 @@ list(
     out_gaugesp_path,
     export_gauges_classes(in_noflow_clusters=noflow_clusters,
                           in_path_gaugep =path_gaugep,
-                          kclass=12,
                           out_shp_root=file.path(resdir, 'gaugep_classstats_avg')
     )
   )

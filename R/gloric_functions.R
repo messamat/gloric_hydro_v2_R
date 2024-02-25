@@ -1419,6 +1419,7 @@ na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
 # in_floor=0
 
 compute_metastatistics_util <- function(in_outliers_path, in_no) {
+  print(in_no)
   in_dt_edit_path <- paste0(
     tools::file_path_sans_ext(in_outliers_path),
     '_edit.csv')
@@ -1449,7 +1450,6 @@ compute_metastatistics_util <- function(in_outliers_path, in_no) {
       ndays_zeroflow = sum(Qobs==0, na.rm=T)
     ), by=year] %>%
       .[,  `:=`(
-        grdc_no = in_no,
         edited_data_path = in_dt_edit_path,
         Q50 = in_dt_clean[
           year %in% .SD[missingdays_edit_interp10 < 15,year],
@@ -1464,13 +1464,17 @@ compute_metastatistics_util <- function(in_outliers_path, in_no) {
 # in_outliers_output_dt <- tar_read(q_outliers_flags)
 # unique(in_outliers_output_dt$grdc_no)
 
-compute_metastatistics_wrapper <- function(in_outliers_output_dt) {
+compute_metastatistics_wrapper <- function(in_outliers_output_dt,
+                                           in_gaugep_dt) {
     out_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))[,
       compute_metastatistics_util(
         in_outliers_path=out_qs,
         in_no=grdc_no),
       by=grdc_no
-    ]
+    ] %>% 
+      merge(in_gaugep_dt[, list(y_geo=y_geo, grdc_no=as.character(grdc_no))],
+            by='grdc_no', all.y=F)
+    
   return(out_dt)
 }
   
@@ -1868,15 +1872,14 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
     grdc_no]
   
   
-  qstats_dt <- lapply(gauges_sel_no, function(in_no) {
+  qstats_dt <- future_lapply(gauges_sel_no, function(in_no) {
     print(in_no)
     #For given gauge, get years with less than the maximum number of missing days
     #given maximum interpolation period
     meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
                                     & get(interp_fn)<=max_miss_sel,]
     
-    #Get latitude of gauge
-    g_lat <- in_gaugep_dt[grdc_no==in_no]$y_geo
+    g_lat <- in_metastats_dt[grdc_no==in_no, unique(y_geo)]
     
     #Read data, keeping only years with number of missing days under threshold
     q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
@@ -2303,32 +2306,63 @@ export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
 
 
 #------ Plot class hydrograph wrapper --------------------------------------------------
-in_noflow_clusters= tar_read(noflow_clusters)
-in_metastats_dt <- tar_read(metastats_dt)
+# in_noflow_clusters= tar_read(noflow_clusters)
+# in_metastats_dt <- tar_read(metastats_dt)
+# max_interp_sel = 5
+# max_miss_sel = 0
+# noflow_qthresh=0.001
 
 plot_class_hydrograph_wrapper <- function(in_noflow_clusters,
                                           in_metastats_dt,
                                           max_interp_sel,
-                                          max_miss_sel
+                                          max_miss_sel,
+                                          noflow_qthresh=0.001
                                           ) {
   kclass <- in_noflow_clusters$kclass
   #in_noflow_clusters$hclust_reslist_all[[in_noflow_clusters$chosen_hclust]]
   cluster_analyses <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]
   
-  class_dt_sub <- cluster_analyses$class_dt[gclass==1,] %>%
-    .[!duplicated(grdc_no), .(grdc_no, gclass, classn)]
+  k_colors <- cluster_analyses$p_dendo$layers[[4]]$data %>%
+    as.data.table %>%
+    .[order(label), col]
   
+  hydrograph_facets <- lapply(seq(kclass), function(in_class) {
+    print(in_class)
+    
+    class_dt_sub <- cluster_analyses$class_dt[gclass == in_class,] %>%
+      .[!duplicated(grdc_no), .(grdc_no, gclass, classn)]
+    
+    out_facet <- plot_class_hydrograph(in_class_dt = class_dt_sub,
+                                       in_metastats_dt = in_metastats_dt,
+                                       max_interp_sel = max_interp_sel,
+                                       max_miss_sel = max_miss_sel,
+                                       in_color = k_colors[in_class],
+                                       noflow_qthresh=noflow_qthresh)
+    return(out_facet)
+  })
+  
+  out_plotgrid <- wrap_plots(hydrograph_facets, 
+                             ncol=floor(sqrt(length(hydrograph_facets))),
+                             axes='collect') +
+    plot_layout(axis_titles = "collect") + 
+    plot_annotation(tag_levels = '1')  & 
+    theme(plot.tag = element_text(size = 10))
+  
+  return(out_plotgrid)
 }
 
 #------ Plot class hydrograph --------------------------------------------------
-in_class_dt <- class_dt_sub
-in_no <- '3649455'
-max_interp_sel = 5
-max_miss_sel = 0
+# in_class_dt <- class_dt_sub
+# #in_no <- '3649455'
+# max_interp_sel = 5
+# max_miss_sel = 0
 
-plot_class_hydrograph <- function(in_class_dt, in_metastats_dt,
+plot_class_hydrograph <- function(in_class_dt, 
+                                  in_metastats_dt,
                                   max_interp_sel,
-                                  max_miss_sel) {
+                                  max_miss_sel,
+                                  in_color,
+                                  noflow_qthresh=0.001) {
   
   interp_fn <- paste0('missingdays_edit',
                       fifelse(max_interp_sel >0,
@@ -2344,21 +2378,136 @@ plot_class_hydrograph <- function(in_class_dt, in_metastats_dt,
                                     & get(interp_fn)<=max_miss_sel,]
     
     #Read data, keeping only years with number of missing days under threshold
-    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]]) %>%
-      .[year %in% meta_sub_yrs$year, 
-        .(grdc_no, date, jday, Qobs, tmax)] %>%#subset columns for speed
+    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]],
+                  select = c('grdc_no', 'date', 'Qobs', 'tmax', 'year')) %>% #subset columns for speed
+      .[year %in% meta_sub_yrs$year,] %>%
       .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
-      .[!duplicated(date),] 
+      .[!duplicated(date),] %>%
+      .[, grdc_no := as.character(grdc_no)] 
     
     return(q_dt)
-  }) %>% rbindlist
+  }) %>% 
+    rbindlist %>%
+    merge(in_metastats_dt[!duplicated(grdc_no), .(grdc_no, y_geo)],
+          by='grdc_no', all.y=F)
   
+  out_facet <- plot_hydrograph(
+    in_dt = q_dt_bind,
+    value_col = 'Qobs',
+    date_col = 'date',
+    lat_col = 'y_geo',
+    in_color = in_color,
+    noflow_qthresh = noflow_qthresh, 
+    smoothing_window = 5
+    )
   
+  return(out_facet)
 }
 
-#------ Plot hydrograph --------------------------------------------------
-plot_hydrograph <- function() {
+#------ Plot hydrograph --------------------------------------------------\
+# in_dt <- q_dt_bind
+# value_col <- 'Qobs'
+# date_col <- 'date'
+# lat_col <- 'y_geo'
+# in_color <- '#4d004b'
+# smoothing_window = 5
+
+plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
+                            q_thresh, in_color, 
+                            noflow_qthresh=0.001, smoothing_window = 5) {
   
+  in_dt[, yrmean := mean(get(value_col), na.rm=T),
+        by=format(get(date_col), '%Y')]
+  
+  if (!('jday' %in% names(in_dt))) {
+    in_dt[, jday := format(get(date_col), '%j')]
+  }
+
+  if (!is.null(lat_col)) {
+    in_dt[, cal_doy := ifelse(
+      y_geo > 0, 
+      format(as.Date(as.numeric(jday)-1, 
+                     origin=paste0(year-1, '-01-01')),
+             "%m-%d"),
+      format(as.Date(as.numeric(jday)-1,
+                     origin=paste0(year-1, '-01-01')),
+             "%m-%d"))]
+  } else {
+    in_dt[, cal_doy := format(as.Date(as.numeric(jday)-1, 
+                                      origin=paste0(year-1, '-01-01')),
+                              "%m-%d")]
+  }
+
+  #Compute statistics on long-term daily flow (average, min, max, Q10, Q25, Q75, Q90) across all stations and years for each class
+  padding_ix <- c(rev(seq(365,1)[seq(smoothing_window%/%2)]), 
+                  1:365, 
+                  seq(smoothing_window%/%2))
+  
+  classflowstats <- in_dt[,list(
+    classmeanfull = mean(get(value_col), na.rm=T), 
+    classmean = mean(get(value_col)/yrmean, na.rm=T),
+    classQ75 = quantile(get(value_col)/yrmean, .25, na.rm=T),
+    classQ25 = quantile(get(value_col)/yrmean, .75, na.rm=T),
+    classQ50 = quantile(get(value_col)/yrmean, .5, na.rm=T),
+    classQ90 = quantile(get(value_col)/yrmean, .10, na.rm=T),
+    classQ10 = quantile(get(value_col)/yrmean, .90, na.rm=T),
+    classmax = max(get(value_col)/yrmean, na.rm=T),
+    classmin = min(get(value_col)/yrmean, na.rm=T),
+    classsd = sd(get(value_col)/yrmean, na.rm=T)
+    ), by=cal_doy] %>%
+    .[padding_ix,] %>%
+    .[, (names(.)[-1]) := sapply(
+      .SD, function(x) frollmean(x, n=smoothing_window, na.rm=T, align='center'), 
+      simplify=F),
+      .SDcols = names(.)[-1]] %>%
+    .[!is.na(classmean),]
+  
+  #Compute daily no-flow probability by calendar day and scale it to plot in the
+  #same panel as the flow stats
+  classnoflowstats <- in_dt[!is.na(get(value_col)),list(
+    prob_noflow=.SD[get(value_col)<noflow_qthresh,.N]/.N
+  ), by=cal_doy] %>%
+    .[padding_ix,] %>%
+    .[, prob_noflow_scaled := frollmean(
+      prob_noflow*max(classflowstats$classQ10, na.rm=T),
+      n=smoothing_window, na.rm=T, align='center')]%>%
+    .[!is.na(prob_noflow_scaled ),]
+  
+  
+  unit_scale_axis <- function(y) {
+    (y - min(y)) / (max(y)-min(y))
+  }
+
+  #Facetted standardized average yearly hydrograph for each class + Q90-Q10 ribbon
+  classhydro_facet <- ggplot(as.data.frame(classflowstats), 
+                            aes(x=as.Date(cal_doy, format="%m-%d"))) + 
+    #geom_ribbon(aes(ymin=ifelse(classmean-2*classsd>=0,classmean-2*classsd,0), ymax=classmean+2*classsd,
+    #                fill=factor(classnames)),alpha=0.3) +
+    geom_ribbon(aes(ymin=classQ90, ymax=classQ10), fill=in_color, alpha=0.3) +
+    geom_ribbon(aes(ymin=classQ75, ymax=classQ25), fill=in_color, alpha=0.5) +
+    geom_line(aes(y=classQ50), color=in_color, linewidth=1) + 
+    geom_line(data=classnoflowstats, aes(y=prob_noflow_scaled), 
+              color='black', linewidth=1.2, alpha=0.5) + 
+    # scale_color_manual(name='Hydrologic class',values=classcol[1:kclass]) +
+    # scale_fill_manual(name='Hydrologic class',values=classcol[1:kclass]) +
+    scale_y_sqrt(
+      name=expression(frac('Daily discharge', 'Mean annual discharge')),
+      expand=c(0,0), limits=c(0,NA),
+      sec.axis = sec_axis(
+        name = 'No-flow probability',
+        trans = ~ unit_scale_axis(.),
+        breaks = c(0, 0.01, 0.05, 0.1, 0.25, 0.5 , 0.75, 1))
+      ) + 
+    scale_x_date(name=expression(Date~frac(North,South)), date_breaks = "3 month", date_labels='%b',
+                 sec.axis = sec_axis(trans = ~ . + 181),
+                 expand=c(0,0)) + 
+    theme_classic() +
+    theme(strip.background = element_blank(),
+          strip.text.y = element_blank(),
+          text = element_text(size=12),
+          axis.text.y.left = element_text(color=in_color))
+  
+  return(classhydro_facet)
 }
 
 #------ Analyze cluster sensitivity --------------------------------------------

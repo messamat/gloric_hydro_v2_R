@@ -242,7 +242,8 @@ list(
   
   tar_target(
     metastats_dt,
-    compute_metastatistics_wrapper(q_outliers_flags)
+    compute_metastatistics_wrapper(q_outliers_flags,
+                                   in_gaugep_dt=gaugep_dt)
   ),
   
   tar_target(
@@ -254,7 +255,6 @@ list(
     noflow_hydrostats,
     compute_noflow_hydrostats_wrapper(in_metastats_analyzed=metastats_analyzed,
                                       in_metastats_dt=metastats_dt,
-                                      in_gaugep_dt=gaugep_dt,
                                       max_interp_sel = 5,
                                       max_miss_sel = 0,
                                       min_nyears = 15,
@@ -279,6 +279,16 @@ list(
                           in_path_gaugep =path_gaugep,
                           out_shp_root=file.path(resdir, 'gaugep_classstats_avg')
     )
+  ),
+  
+  tar_target(
+    unit_hydrographs,
+    plot_class_hydrograph_wrapper(in_noflow_clusters = noflow_clusters,
+                                  in_metastats_dt = metastats_dt,
+                                  max_interp_sel = 5,
+                                  max_miss_sel = 0,
+                                  noflow_qthresh = 0.001
+    ) 
   )
 )
 

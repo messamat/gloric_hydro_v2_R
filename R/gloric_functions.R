@@ -2277,6 +2277,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   return(list(
     hclust_reslist_all = hclust_reslist,
     cluster_analyses = cluster_analyses_avg,
+    hydro_dist = hydro_dist,
     chosen_hclust = 'average',
     kclass = 9
   ))
@@ -2398,7 +2399,7 @@ plot_class_hydrograph <- function(in_class_dt,
     lat_col = 'y_geo',
     in_color = in_color,
     noflow_qthresh = noflow_qthresh, 
-    smoothing_window = 5
+    smoothing_window = 7
     )
   
   return(out_facet)
@@ -2414,7 +2415,7 @@ plot_class_hydrograph <- function(in_class_dt,
 
 plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
                             q_thresh, in_color, 
-                            noflow_qthresh=0.001, smoothing_window = 5) {
+                            noflow_qthresh=0.001, smoothing_window = 7) {
   
   in_dt[, yrmean := mean(get(value_col), na.rm=T),
         by=format(get(date_col), '%Y')]
@@ -2430,7 +2431,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
                      origin=paste0(year-1, '-01-01')),
              "%m-%d"),
       format(as.Date(as.numeric(jday)-1,
-                     origin=paste0(year-1, '-01-01')),
+                     origin=paste0(year-1, '-07-01')),
              "%m-%d"))]
   } else {
     in_dt[, cal_doy := format(as.Date(as.numeric(jday)-1, 
@@ -2510,15 +2511,86 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
   return(classhydro_facet)
 }
 
+
+#------ fast_cluster -----------------------------------------------------------
+fast_cluster_compare <- function(in_mat, in_method, in_kclass, comp_clust) {
+  hydro_dist <- cluster::daisy(
+    in_mat, 
+    metric = "euclidean") %>%
+    as.dist
+  
+  new_clust <- fastcluster::hclust(hydro_dist, method=in_method) %>%
+    cutree(k=in_kclass)
+  
+  out_ari <- aricode::ARI(comp_clust, new_clust)
+
+  return(out_ari)
+}
+
 #------ Analyze cluster sensitivity --------------------------------------------
-# analyze_cluster_sensitivity <- function(in_cluster) {
-#   #Permute each variable
-#   #Remove each gauge
-#   
-#   #Compute Adjusted Rand Index
-#   #Compute cophenetic correlation between trees
-#   
-# }
+in_noflow_clusters <- tar_read(noflow_clusters)
+in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
+
+
+analyze_cluster_sensitivity <- function(in_cluster,
+                                        in_hydrostats_preformatted) {
+  #Permute each variable
+  kclass <- in_noflow_clusters$kclass
+  base_clust_reslist <- in_noflow_clusters$hclust_reslist_all[[
+    in_noflow_clusters$chosen_hclust]]
+  base_hclust <- base_clust_reslist$hclust %>%
+    cutree(k=kclass)
+  hydrostats_mat <- in_hydrostats_preformatted$mat
+  
+  cols_ix <- seq(dim(hydrostats_mat)[2])
+  rows_ix <- seq(dim(hydrostats_mat)[1])
+  
+  #---------------- Compute variable importance in clustering ------------------
+  get_col_ARI <- function(in_mat, col_ix, rows_ix, 
+                          in_method, in_kclass, comp_clust) {
+    mat_permut <- in_mat
+    mat_permut[,col_ix] <- mat_permut[
+      sample(rows_ix, size=length(rows_ix), replace=FALSE),col_ix] 
+    
+    fast_cluster_compare(in_mat=mat_permut,
+                         in_method=in_method,
+                         in_kclass=in_kclass,
+                         comp_clust=comp_clust)
+  }
+  
+  hydrostats_ari <- future_lapply(cols_ix, function(col_to_permute) {
+    ari_list <- replicate(100, get_col_ARI(in_mat=hydrostats_mat,
+                                           col_ix=col_to_permute,
+                                           rows_ix=rows_ix,
+                                           in_method=in_noflow_clusters$chosen_hclust,
+                                           in_kclass=kclass,
+                                           comp_clust=base_hclust))
+    return(data.table(
+      var = colnames(hydrostats_mat)[[col_to_permute]],
+      ari = ari_list
+    )) 
+  }) %>% rbindlist
+  
+  hydrostats_ari[, mean_ari := mean(ari), by=var] %>%
+    .[, var := factor(var, levels=.SD[order(mean_ari), unique(var)])]
+
+  #---------------- Compute stability against single-gauge removal  ------------
+  
+
+  
+    
+    
+  }
+
+  
+  
+  
+  #Remove each gauge
+
+  #Compute Adjusted Rand Index
+  #Compute cophenetic correlation between trees
+
+}
 
 
 ################### EXTRA STUFF ################################################

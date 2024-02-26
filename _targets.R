@@ -14,6 +14,18 @@ plan(multisession, workers=nthreads)
 tar_option_set(format = "qs",
                controller= crew_controller_local(workers = nthreads))
 
+
+#------ There is an issue with large fread in the pipeline so need to run this---
+gires_qs_path <- file.path(resdir, 'gires_net_sub.qs')
+if (!file.exists(gires_qs_path)) {
+  gires_net_dt <- fread(file.path(datdir, 'gires', 'GIRES_v10_rivers.csv'),
+                        select = c("HYRIV_ID","LENGTH_KM", 
+                                   "predprob1", "predprob30", 
+                                   predvars$varcode))
+  qsave(gires_net_dt,
+        gires_qs_path)
+}
+
 #--- Parameters ---------------------------------------------------------------
 min_yrs = 20
 overwrite=F
@@ -26,6 +38,10 @@ list(
   tar_target(path_GIRES_metadata, file.path(datdir, 'gauges', 'gires', "high_qual_daily_stations.csv")), # format='file'),
   tar_target(path_gaugep, file.path(resdir, 'stations_preprocess.gdb', paste0('grdc_p_o', min_yrs, 'y_cleanjoin'))),
   tar_target(url_riggs2023, "https://zenodo.org/records/7150168/files/zenodo.zip", format='url'),
+  
+  tar_target(path_riveratlas_meta, file.path(datdir, "hydroatlas", "HydroATLAS_metadata_MLMv11.xlsx")),
+  tar_target(path_riveratlas_legends, file.path(datdir, "hydroatlas", "HydroATLAS_v10_Legends.xlsx")),
+  
   
   tar_target(path_gauge_netdist, file.path(resdir, 'grdc_p_o20y_cleanjoin_netdist_tab.csv')), # format='file'),
   tar_target(path_gauge_geodist, file.path(resdir, 'grdc_p_o20y_cleanjoin_geodist_tab.csv')), # format='file')
@@ -40,12 +56,19 @@ list(
   tar_target(path_gauges_rivicetiles_join, file.path(resdir, 'grdc_p_o20y_clean_landsatjoin.csv'))
   ,  
   
+  
+  
   #------------------------------ Read files -----------------------------------
   tar_target(GRDC_metadata,
              read_xlsx(path_GRDC_metadata, sheet = 'station_catalogue') %>%
                as.data.table
   )
   ,
+  
+  tar_target(
+    predvars,
+    selectformat_predvars(inp_riveratlas_meta = path_riveratlas_meta)
+  ),
   
   tar_target(gaugep_dt,
              vect(dirname(path_gaugep), layer=basename(path_gaugep)) %>%
@@ -293,8 +316,9 @@ list(
   
   tar_target(
     cluster_sensitivity,
-    analyze_cluster_sensitivity(in_cluster,
-                                in_hydrostats_preformatted)
+    analyze_cluster_sensitivity(
+      in_noflow_clusters = noflow_clusters,
+      in_hydrostats_preformatted = noflow_hydrostats_preformatted)
   )
 )
 

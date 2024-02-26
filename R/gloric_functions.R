@@ -450,6 +450,652 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
   return(list(classes=classr_df, 
               plot=ggdendro_p_format))
 }
+#------ selectformat_predvars -----------------
+#' Select + format predictor variables
+#'
+#' Select candidate predictor variables to use in subsequent modelling and create
+#' a table of formatted names.
+#'
+#' @param inp_riveratlas_meta path to metadata table for river atlas variables
+#' @param in_gaugestats data.table of formatted gauging station summary statistics and hydro-environmental attributes.
+#' 
+#' 
+#' @return data.table of selected predictor variable codes, names, category, 
+#' attribute, sources, references, etc. Most sources are from RiverATLAS 
+#' technical documentation available at https://www.hydrosheds.org/page/hydroatlas.
+#' 
+#' @export
+selectformat_predvars <- function(inp_riveratlas_meta, in_gaugestats) {
+  #---- List predictor variables ----
+  predcols<- c(
+    #monthlydischarge_preds,
+    'UPLAND_SKM',
+    'dis_m3_pyr',
+    'dis_m3_pmn',
+    'dis_m3_pmx',
+    'dis_m3_pvar',
+    'dis_m3_pvaryr',
+    'run_mm_cyr',
+    'runc_ix_cyr', #runoff coefficient (runoff/precipitation)
+    'sdis_ms_uyr', #specific discharge
+    'sdis_ms_umn',
+    'inu_pc_umn',
+    'inu_pc_umx',
+    'inu_pc_cmn',
+    'lka_pc_cse',
+    'lka_pc_use',
+    #'dor_pc_pva', #anthropogenic - degree of regulation
+    'ele_pc_rel',
+    'slp_dg_cav',
+    'slp_dg_uav',
+    'clz_cl_cmj',
+    'snw_pc_uyr',
+    'snw_pc_cyr',
+    'snw_pc_cmx',
+    'glc_cl_cmj',
+
+    'pnv_cl_cmj',
+    'for_pc_use',
+    'for_pc_cse',
+    'gla_pc_use',
+    'gla_pc_cse',
+    'prm_pc_use',
+    'prm_pc_cse',
+    'swc_pc_uyr',
+    'swc_pc_cyr',
+    'swc_pc_cmn',
+    'lit_cl_cmj',
+    'kar_pc_use',
+    'kar_pc_cse',
+    
+    'cly_pc_cav',
+    'cly_pc_uav',
+    'slt_pc_cav',
+    'slt_pc_uav',
+    'snd_pc_cav',
+    'snd_pc_uav',
+
+    'ari_ix_cav',
+    'ari_ix_uav',
+    'bio1_dc_cav',
+    'bio2_dc_cav',
+    'bio3_dc_cav',
+    'bio4_dc_cav',
+    'bio5_dc_cav',
+    'bio6_dc_cav',
+    'bio7_dc_cav',
+    'bio10_dc_cav',
+    'bio11_dc_cav',
+    'bio12_mm_cav',
+    'bio13_mm_cav',
+    'bio14_mm_cav',
+    'bio15_mm_cav',
+
+    'bio1_dc_uav',
+    'bio2_dc_uav',
+    'bio3_dc_uav',
+    'bio4_dc_uav',
+    'bio5_dc_uav',
+    'bio6_dc_uav',
+    'bio7_dc_uav',
+    'bio10_dc_uav',
+    'bio11_dc_uav',
+    'bio12_mm_uav',
+    'bio13_mm_uav',
+    'bio14_mm_uav',
+    'bio15_mm_uav'
+  )
+  
+  #---- Associate HydroATLAS column names with variables names ----
+  
+  #Get predictor variable names
+  metaall <- readxl::read_xlsx(inp_riveratlas_meta,
+                               sheet='Overall') %>%
+    setDT
+  
+  metascale <- readxl::read_xlsx(inp_riveratlas_meta,
+                                 sheet='scale') %>%
+    setDT %>%
+    setnames(c('Key','Spatial representation'),
+             c('Keyscale', 'Spatial.representation'))
+  
+  metastat <- readxl::read_xlsx(inp_riveratlas_meta,
+                                sheet='stat') %>%
+    setDT %>%
+    setnames(c('Key','Temporal or statistical aggregation or other association'),
+             c('Keystat', 'Temporal.or.statistical.aggregation.or.other.association'))
+  
+  meta_format <- as.data.table(expand.grid(`Column(s)`=metaall$`Column(s)`,
+                                           Keyscale=metascale$Keyscale,
+                                           Keystat=metastat$Keystat)) %>%
+    .[metaall, on='Column(s)'] %>%
+    .[metascale, on = 'Keyscale'] %>%
+    .[metastat, on = 'Keystat',
+      allow.cartesian=TRUE]
+  
+  meta_format[, `:=`(
+    unit = substr(`Column(s)`, 5, 6),
+    varcode = paste0(gsub('[-]{3}', '', `Column(s)`),
+                     Keyscale,
+                     fifelse(grepl("[0-9]",Keystat),
+                             str_pad(Keystat, 2, side='left', pad='0'),
+                             Keystat)),
+    varname = paste(Attribute,
+                    Spatial.representation,
+                    Temporal.or.statistical.aggregation.or.other.association))]
+  
+  #Add newly generated variables to meta_format (variable labels)
+  addedvars <- data.table(varname=c('Precipitation catchment Annual min/max',
+                                    'Discharge watershed Annual min/max',
+                                    'Discharge watershed Annual min/average',
+                                    'Elevation catchment average - watershed average',
+                                    'Runoff coefficient catchment Annual average',
+                                    'Specific discharge watershed Annual average',
+                                    'Specific discharge watershed Annual min',
+                                    'Drainage area',
+                                    'Groundwater table depth catchment average'),
+                          varcode=c('pre_mm_cvar',
+                                    'dis_m3_pvar', 
+                                    'dis_m3_pvaryr',
+                                    'ele_pc_rel',
+                                    'runc_ix_cyr',
+                                    'sdis_ms_uyr', 
+                                    'sdis_ms_umn',
+                                    'UPLAND_SKM',
+                                    'gwt_m_cav'
+                          )
+  )
+  
+  oldcolnames <- c('Spatial.representation',
+                   'Temporal.or.statistical.aggregation.or.other.association',
+                   'Source Data')
+  newcolnames <- c('Spatial representation',
+                   'Temporal/Statistical aggreg.',
+                   'Source')
+  
+  predcols_dt <- merge(data.table(varcode=predcols),
+                       rbind(meta_format, addedvars, fill=T),
+                       by='varcode', all.x=T, all.y=F)   %>%
+    setnames(oldcolnames, newcolnames) %>%
+    setorder(Category, Attribute,
+             `Spatial representation`, `Temporal/Statistical aggreg.`)
+  
+  #Format table
+  predcols_dt[varcode=='UPLAND_SKM', `:=`(
+    Category = 'Physiography',
+    Attribute= 'Drainage Area',
+    `Spatial representation`='u',
+    `Temporal/Statistical aggreg.`='',
+    Source = 'HydroSHEDS',
+    Citation = 'Lehner & Grill 2013'
+  )]
+  
+  predcols_dt[varcode=='dis_m3_pvar', `:=`(
+    Category = 'Hydrology',
+    Attribute= 'Natural Discharge',
+    `Spatial representation`='p',
+    `Temporal/Statistical aggreg.`='mn/mx',
+    Source = 'WaterGAP v2.2',
+    Citation = 'Döll et al. 2003'
+  )]
+  
+  predcols_dt[varcode=='dis_m3_pvaryr', `:=`(
+    Category = 'Hydrology',
+    Attribute= 'Natural Discharge',
+    `Spatial representation`='p',
+    `Temporal/Statistical aggreg.`='mn/yr',
+    Source = 'WaterGAP v2.2',
+    Citation = 'Döll et al. 2003'
+  )]
+  
+  predcols_dt[varcode=='runc_ix_cyr', `:=`(
+    Category = 'Hydrology',
+    Attribute= 'Runoff coefficient',
+    `Spatial representation`='c',
+    `Temporal/Statistical aggreg.`='yr',
+    Source = 'WaterGAP v2.2, WorldClim v2',
+    Citation = 'Döll et al. 2003'
+  )]
+  
+  predcols_dt[varcode=='sdis_ms_uyr', `:=`(
+    Category = 'Hydrology',
+    Attribute= 'Specific discharge',
+    `Spatial representation`='u',
+    `Temporal/Statistical aggreg.`='yr',
+    Source = 'WaterGAP v2.2',
+    Citation = 'Döll et al. 2003'
+  )]
+  
+  predcols_dt[varcode=='sdis_ms_umn', `:=`(
+    Category = 'Hydrology',
+    Attribute= 'Specific discharge',
+    `Spatial representation`='u',
+    `Temporal/Statistical aggreg.`='mn',
+    Source = 'WaterGAP v2.2',
+    Citation = 'Döll et al. 2003'
+  )]
+  
+  predcols_dt[varcode=='ele_pc_rel', `:=`(
+    Category = 'Physiography',
+    Attribute= 'Elevation',
+    `Spatial representation`='c',
+    `Temporal/Statistical aggreg.`='(cav-uav)/uav',
+    Source = 'EarthEnv-DEM90',
+    Citation = 'Robinson et al. 2014'
+  )]
+  
+  predcols_dt[varcode=='cmi_ix_cvar', `:=`(
+    Category = 'Climate',
+    Attribute= 'Climate Moisture Index',
+    `Spatial representation`='c',
+    `Temporal/Statistical aggreg.`='mn/mx',
+    Source = 'WorldClim v2 & Global-PET v2',
+    Citation = 'Fick et al. 2017',
+    varname = 'Climate moisture index catchment monthly mn/mx'
+  )]
+  
+  predcols_dt[varcode=='cmi_ix_uvar', `:=`(
+    Category = 'Climate',
+    Attribute= 'Climate Moisture Index',
+    `Spatial representation`='u',
+    `Temporal/Statistical aggreg.`='mn/mx',
+    Source = 'WorldClim v2 & Global-PET v2',
+    Citation = 'Fick et al. 2017',
+    varname = 'Climate moisture index watershed monthly mn/mx'
+  )]
+  
+  predcols_dt[varcode=='gwt_m_cav', `:=`(
+    Category = 'Hydrology',
+    Attribute= 'Groundwater table depth',
+    `Spatial representation`='c',
+    `Temporal/Statistical aggreg.`='av',
+    Source = 'Global Groundwater Map',
+    Citation = 'Fan et al. 2013'
+  )]
+  
+  #Remove duplicates (which were created with keystat meaning different things e.g; 09 meaning september, 2009, class 9)
+  predcols_dtnodupli<- predcols_dt[!(
+    (Category == "Climate" &
+       grepl('Class.*', `Temporal/Statistical aggreg.`)) |
+      (Category == "Landcover" &
+         !grepl('(Class|Spatial).*', `Temporal/Statistical aggreg.`))
+  ),]  %>%
+    unique(by='varcode')
+  
+  return(predcols_dtnodupli)
+}
+
+#------ comp_derivedvar -----------------
+#' Compute derived variables
+#'
+#' Format and compute derived a set of environmental variables from input
+#' dataset that contains
+#' \href{https://www.hydrosheds.org/page/hydroatlas}{HydroATLAS} variables for
+#' the purpose of predicting intermittency.
+#'
+#' @param dt data.table which contains rows as records and HydroATLAS
+#'   environmental variables as columns.
+#' @param copy (logical) whether to make a copy of \code{dt} (if TRUE) or to
+#'   modify it in place (if FALSE)
+#'
+#' @details This function only formats and compute derived variables deemed
+#'   relevant for the intermittency analysis. \cr
+#'   \cr
+#'   Steps include: \cr
+#'   1. Convert some -9999 that should be 0 after checking them
+#'   2. Count the number of -9999 values per column
+#'   3. Convert the rest of the -9999 values to NA
+#'   4. Compute a set of derived variables based on existing variables in
+#'   HydroATLAS
+#'   (e.g. \code{pre_mm_cvar= fifelse(pre_mm_cmx==0, 0, pre_mm_cmn/pre_mm_cmx)})
+#'   5. Correct scaling from RiverATLAS
+#'   (e.g. Degree of regulation is out of 10,000 in HydroATLAS)
+#'
+#' ```
+#' @source Linke, S., Lehner, B., Dallaire, C. O., Ariwi, J., Grill, G., Anand,
+#'   M., ... & Tan, F. (2019). Global hydro-environmental sub-basin and river
+#'   reach characteristics at high spatial resolution. Scientific Data, 6(1),
+#'   1-15.
+#'
+#' @export
+comp_derivedvar <- function(in_dt, copy=FALSE) {
+  if (copy) {
+    in_dt2 <- copy(in_dt)
+  } else {
+    in_dt2 <- in_dt
+  }
+  
+  
+  #---- Inspect and correct -9999 and NA values ----
+  print('Inspect and correct -9999 values')
+  #check <- riveratlas[snw_pc_cyr == -9999,] #One reach in the middle of the Pacific
+  in_dt2[snw_pc_cyr == -9999, snw_pc_cyr:=0]
+  in_dt2[snw_pc_cmx == -9999, snw_pc_cmx:=0]
+  
+  #Places with very high slope value (in Greenland) have -9999 - replace with high value
+  #in_dt2[, max(slp_dg_uav)]
+  in_dt2[slp_dg_cav == -9999, `:=`(slp_dg_cav = 750,
+                                   slp_dg_uav = 650)]
+  
+  #bio5 is -9999 in a few places in Greenland. Set at lowest existing value
+  # in_dt2[bio5_dc_cav>-9999, min(bio5_dc_cav)]
+  # in_dt2[bio5_dc_uav != -9999, min(bio5_dc_uav)]
+  in_dt2[bio5_dc_cav == -9999, bio5_dc_cav := -950]
+  in_dt2[bio5_dc_uav == -9999, bio5_dc_uav:= -9500]
+  
+  print('Number of NA values per column')
+  colNAs<- in_dt2[, lapply(.SD, function(x) sum(is.na(x)))]
+  print(colNAs)
+  
+  print('Number of -9999 values per column')
+  col9999<- in_dt2[, lapply(.SD, function(x) sum(x==-9999))]
+  print(col9999)
+  
+  #-9999 in cly_pc_cav, slt, and snd are places with no soil mask (urban areas, lakes, glaciers, etc.)
+  
+  
+  #Define column groups
+  gladcols <- unlist(lapply(c('cav', 'uav'),function(s) {
+    lapply(c('wloss', 'wdryp', 'wwetp', 'whfrq', 'wseas', 'wperm', 'wfresh',
+             'wwpix', 'wdpix'),
+           function(v) {
+             paste0(v, '_pc_', s)
+           })
+  })
+  )
+  
+  sgcols <- c('cly_pc_cav','slt_pc_cav', 'snd_pc_cav',
+              'cly_pc_uav','slt_pc_uav', 'snd_pc_uav')
+  
+  #Bioclim columns in celsius degrees
+  biocolsdc <- unlist(lapply(c('cav', 'uav'),
+                             function(s) paste0('bio', c(1:7,10,11), '_dc_', s)
+  ))
+  biocolsnegative <- grep('bio[189][01]*_dc_uav', biocolsdc, value=T)
+  
+  # cmi_cmcols <- paste0('cmi_ix_c', str_pad(1:12, width=2, side='left', pad=0))
+  # cmi_umcols <- paste0('cmi_ix_u', str_pad(1:12, width=2, side='left', pad=0))
+  
+  #Convert -9999 to NAs
+  for (j in which(sapply(in_dt2,is.numeric))) { #Iterate through numeric column indices
+    if (!(j %in% which(names(in_dt2) %in% c(gladcols, sgcols, 'wet_cl_cmj')))) {
+      set(in_dt2,which(in_dt2[[j]]==-9999),j, NA) #Set those to NA if -9999
+    }
+  }
+  
+  #Scale variables based on HydroATLAS v1.0 documentation and v1.0.9 processing
+  in_dt2[, `:=`(
+    ari_ix_cav = ari_ix_cav/1000,
+    ari_ix_uav = ari_ix_uav/1000,
+    lka_pc_cse = lka_pc_cse/10,
+    lka_pc_use = lka_pc_use/10
+  )]
+  
+  in_dt2[, (biocolsdc) := lapply(.SD, function(x) (x/100)), .SDcols = biocolsdc]
+  in_dt2[, (biocolsnegative) := lapply(.SD, function(x) x-100),
+         .SDcols=biocolsnegative]
+  
+  #---- Compute derived predictor variables ----
+  print('Compute derived predictor variables')
+  in_dt2[, `:=`(
+      #min/max monthly watershed discharge
+      dis_m3_pvar=fifelse(dis_m3_pmx==0, 1, dis_m3_pmn/dis_m3_pmx),
+      #min monthly/average yearly watershed discharge
+      dis_m3_pvaryr=fifelse(dis_m3_pyr==0, 1, dis_m3_pmn/dis_m3_pyr),
+      #runoff coefficient (runoff/precipitation)
+      runc_ix_cyr = fifelse(bio12_mm_cav==0, 0, run_mm_cyr/bio12_mm_cav),
+      #Specific discharge
+      sdis_ms_uyr = dis_m3_pyr/UPLAND_SKM,
+      sdis_ms_umn = dis_m3_pmn/UPLAND_SKM
+    )]
+  return(in_dt2)
+}
+
+#------ formatscales ------------
+#' Format plot scales
+#'
+#' Utility function to format plot scales for density distribution plots of environmental variables.
+#' 
+#' @param in_df data.frame with all records for environmental variables. 
+#' Used to determine the appropriate range of values for each variable. In this case, 
+#' a data.table of the river network hydro-environmental attributes.
+#' @param varstopplot vector of variable names that will be plots and for which 
+#' to return a list of scales
+#'  
+#' @return list of x and y scale objects + cartesian coordinates for ggplot
+#' 
+#' 
+#' @export
+formatscales <- function(in_df, varstoplot) {
+  scales_x <- list(
+    ari_ix_uav = scale_x_continuous(expand=c(0,0)),
+    bio12_mm_uav  = scale_x_sqrt(expand=c(0,0),
+                                 breaks=c(0, 100, 500, 1000, 5000, 10000),
+                                 labels=c(0, 100, 500, 1000, 5000, 10000)),
+    bio14_mm_uav  = scale_x_sqrt(expand=c(0,0),
+                                 breaks = c(0, 10, 50, 100, 200, 400),
+                                 labels=c(0, 10, 50, 100, 200, 400)),
+    cly_pc_uav = scale_x_continuous(labels=scales::percent_format(scale=1),
+                                    expand=c(0,0)),
+    cmi_ix_uyr = scale_x_continuous(),
+    dis_m3_pyr = scale_x_log10(breaks=c(1, 10^2,
+                                        10^(0:log10(max(in_df$dis_m3_pyr)))),
+                               labels=c(0, 10^2,
+                                        10^(0:log10(max(in_df$dis_m3_pyr)))),
+                               expand=c(0,0)),
+    dor_pc_pva = scale_x_continuous(labels=scales::percent_format(scale=1),
+                                    expand=c(0,0)),
+    for_pc_use = scale_x_sqrt(breaks=c(0, 5, 20, 50, 100),
+                              labels=scales::percent_format(scale=1),
+                              expand=c(0,0)),
+    gla_pc_use = scale_x_continuous(labels=scales::percent_format(scale=1),
+                                    expand=c(0,0)),
+    kar_pc_use = scale_x_sqrt(breaks=c(0, 5, 20, 50, 100),
+                              labels=scales::percent_format(scale=1),
+                              expand=c(0,0)),
+    lka_pc_use = scale_x_sqrt(breaks=c(0, 5, 20, 50, 100),
+                              labels=scales::percent_format(scale=1),
+                              expand=c(0,0)),
+    pet_mm_uyr = scale_x_continuous(expand=c(0,0)),
+    sdis_ms_uyr = scale_x_sqrt(breaks=c(0.01, 0.05, 0.1, 0.2),
+                               expand=c(0,0)),
+    snw_pc_uyr = scale_x_sqrt(breaks=c(0, 5, 20, 50, 100),
+                              labels=scales::percent_format(scale=1),
+                              expand=c(0,0)),
+    run_mm_cyr = scale_x_continuous(expand=c(0,0)),
+    swc_pc_uyr = scale_x_continuous(labels=scales::percent_format(scale=1),
+                                    expand=c(0,0)),
+    tmp_dc_uyr = scale_x_continuous(expand=c(0,0)),
+    hdi_ix_cav = scale_x_continuous(expand=c(0,0)),
+    hft_ix_c93 = scale_x_continuous(expand=c(0,0)),
+    ORD_STRA = scale_x_continuous(expand=c(0,0)),
+    UPLAND_SKM = scale_x_log10(breaks=c(1, 10^2,
+                                        10^(0:log10(max(in_df$UPLAND_SKM)))),
+                               labels=c(1, 10^2,
+                                        10^(0:log10(max(in_df$UPLAND_SKM)))),
+                               expand=c(0,0)),
+    gwt_m_cav = scale_x_sqrt(expand=c(0,0)),
+    ire_pc_use = scale_x_continuous(labels=scales::percent_format(scale=1),
+                                    expand=c(0,0))
+  ) %>%
+    .[(names(.) %in% names(in_df)) & names(.) %in% varstoplot]
+  #Only keep those variables that are actually in df and that we want to plot
+  
+  scales_y <- unlist(rep(list(scale_y_continuous(expand=c(0,0))),
+                         labels = scales::scientific_format(),
+                         length(scales_x)),
+                     recursive=F) %>%
+    setNames(names(scales_x))
+  
+  scales_y[['dis_m3_pmn']] <- scale_y_sqrt(expand=c(0,0))
+  scales_y[['glc_pc_u16']] <- scale_y_continuous(trans='log1p',
+                                                 breaks=c(10, 1000, 100000, 10000000))
+  
+  coordcart <- lapply(varstoplot, function(var) {
+    coord_cartesian(xlim=as.data.table(in_df)[, c(min(get(var), na.rm=T),
+                                                  max(get(var), na.rm=T))])
+  }) %>%
+    setNames(varstoplot)
+  
+  coordcart[['clz_cl_cmj']] <-  coord_cartesian(
+    xlim=c(1,max(in_df$clz_cl_cmj)))
+  coordcart[['kar_pc_use']] <-  coord_cartesian(
+    xlim=c(0, 100))
+  coordcart[['pet_mm_uyr']] <-  coord_cartesian(
+    xlim=c(0, max(in_df$pet_mm_uyr)))
+  coordcart[['ORD_STRA']] <-  coord_cartesian(
+    xlim=c(1, 10))
+  coordcart[['ari_ix_uav']] <-  coord_cartesian(
+    xlim=c(0, 100))
+  
+  return(list(scales_x=scales_x, scales_y=scales_y, coordcart=coordcart))
+}
+
+#------ ggenvhist -------------
+#' Plot of environmental histogram
+#'
+#' Utility function to create an individual density plot of the distribution of a 
+#' given environmental variables across gauges and the whole global river network.
+#' 
+#' @param vartoplot (column) variable for which to produce a density plot.
+#' @param in_gaugedt data.table of gauging stations' environmental attributes.
+#' @param in_rivdt data.table of global river network's environmental attributes 
+#' @param in_predvars data.table of predictor variable codes, names and attributes. 
+#' Output from \link{selectformat_predvars}.
+#' @param scalesenvhist list of scale objects to format plot. From \link{formatscales}.
+#' 
+#' @return ggplot with two density distributions of the environmental variable,
+#' one for the gauging stations and one for the global river network. 
+#' 
+#' 
+#' @export
+ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
+                      scalesenvhist) {
+  print(vartoplot)
+  
+  varname <- in_predvars[varcode==vartoplot, Attribute]
+  #paste0(Attribute, ' ',Keyscale,Keystat,' (',unit,')')]
+  
+  if (vartoplot == "clz_cl_cmj") {
+    rivclz <- in_rivdt[, sum(LENGTH_KM)/in_rivdt[,sum(LENGTH_KM)],
+                       by=as.factor(clz_cl_cmj)]
+    gclz <- in_gaugedt[,.N/in_gaugedt[,.N],by=as.factor(clz_cl_cmj)]
+    bindclz <- rbind(rivclz, gclz, idcol='source')%>%
+      setnames(c( 'source', vartoplot, 'density'))
+    
+    penvhist <- ggplot(bindclz, aes_string(x=vartoplot, y='density')) +
+      geom_bar(aes(fill=as.factor(source)), stat='identity',
+               position = 'dodge', alpha=1/2, width=.6) +
+      scale_fill_manual(values=c('#2b8cbe', '#dd3497'))
+    
+  } else if (vartoplot == "glc_pc_u16") {
+    rivclz <- in_rivdt[, sum(LENGTH_KM)/in_rivdt[,sum(LENGTH_KM)],
+                       by=glc_pc_u16]
+    gclz <- in_gaugedt[,.N/in_gaugedt[,.N],by=glc_pc_u16]
+    bindclz <- rbind(rivclz, gclz, idcol='source')%>%
+      setnames(c( 'source', vartoplot, 'density'))
+    
+    penvhist <- ggplot(bindclz, aes_string(x=vartoplot, y='density')) +
+      geom_bar(aes(fill=as.factor(source)), stat='identity',
+               position = 'identity', alpha=1/2, width=.6) +
+      scale_fill_manual(values=c('#2b8cbe', '#dd3497'))
+    #
+    #     penvhist <- ggplot(in_gaugedt, aes_string(x=vartoplot)) +
+    #       geom_histogram(data=in_rivdt, aes(weight = LENGTH_KM),
+    #                      fill='#2b8cbe', alpha=0.5, bins=101) +
+    #       geom_histogram(fill='#dd3497', alpha=0.5, bins=101)
+    
+  } else {
+    penvhist <- ggplot(in_gaugedt, aes_string(x=vartoplot)) +
+      geom_density(data=in_rivdt, aes(weight = LENGTH_KM),
+                   fill='#2b8cbe', alpha=0.5) +
+      geom_density(fill='#dd3497', alpha=0.5) +
+      ylab('Density')
+  }
+  
+  penvhist <- penvhist +
+    scalesenvhist$scales_x[[vartoplot]] +
+    #scalesenvhist$scales_y[[vartoplot]] +
+    scalesenvhist$coordcart[[vartoplot]] +
+    xlab(varname) +
+    theme_classic() +
+    theme(strip.background=element_rect(colour="white", fill='lightgray'),
+          legend.position = 'none',
+          axis.title.y = element_blank(),
+          axis.title = element_text(size=12))
+  
+  # if (which(vartoplot %in% varstoplot_hist)!=length(varstoplot_hist)) {
+  #   penvhist <- penvhist +
+  #     theme(legend.position='none')
+  # }
+  
+  return(ggplotGrob(penvhist))
+}
+
+#------ layout_ggenvhist --------------------------
+#' Layout plots of environmental histograms
+#'
+#' Run plotting functions across predictor variables and arrange plots
+#' 
+#' @param in_rivernetwork data.table of global river network's environmental attributes. Here, output from \link{rformat_network}.
+#' @param in_gaugepred selected gauging stations' environmental attributes. Here, output from \link{write_gaugepreds}.
+#' @param in_predvars data.table of predictor variable codes, names and attributes. 
+#' Output from \link{selectformat_predvars}.
+#' 
+#' @details function used to produce Extended Data Fig. 8  c-p in Messager et al. 2021.
+#' 
+#' @return ggplots with two density distributions of the environmental variable,
+#' one for the gauging stations and one for the global river network. 
+#' 
+#' 
+#' @export
+layout_ggenvhist <- function(in_rivernetwork, in_gaugepred, in_predvars) {
+  varstoplot_hist <- c(
+    "bio1_dc_uav", "bio7_dc_uav", "bio12_mm_uav", "bio14_mm_uav", "clz_cl_cmj",
+    "ari_ix_uav", "dis_m3_pyr", "sdis_ms_uyr", "UPLAND_SKM",
+    "lka_pc_use", "snw_pc_uyr", "kar_pc_use", "for_pc_use") #, "glc_pc_u16")
+  
+  if ("dis_m3_pyr" %in% varstoplot_hist) {
+    setDT(in_rivernetwork)[, dis_m3_pyr := dis_m3_pyr + 1]
+    setDT(in_gaugepred)[, dis_m3_pyr := dis_m3_pyr + 1]
+  }
+  
+  in_gaugepred[, IRpredcat_full := fifelse(predprob1>=0.5, 1, 0)]
+  
+  #Get legend
+  pleg <- ggplot(in_gaugepred, aes(x=dis_m3_pyr, fill=factor(IRpredcat_full))) +
+    geom_density(alpha=1/2) +
+    scale_fill_manual(values=c('#2b8cbe', '#dd3497'),
+                      name = 'Dataset',
+                      labels=c('Global non-perennial river network (predicted)',
+                               'Training gauges')) +
+    theme(text=element_text(size=14))
+  
+  tmp <- ggplot_gtable(ggplot_build(pleg))
+  leg <- tmp$grobs[[
+    which(sapply(tmp$grobs, function(y) y$name) == "guide-box")
+  ]]
+  
+  #Get scales
+  scalesenvhist <- formatscales(in_df=in_rivernetwork, varstoplot=varstoplot_hist)
+  
+  #Plot each facet
+  penvhist_grobs <- lapply(varstoplot_hist, ggenvhist,
+                           in_gaugedt = in_gaugepred,
+                           in_rivdt = in_rivernetwork,
+                           in_predvars = in_predvars,
+                           scalesenvhist = scalesenvhist)
+  #Add legend
+  penvhist_grobs[[length(penvhist_grobs) + 1]] <- leg
+  
+  #Plot
+  grid::grid.newpage()
+  do.call("grid.arrange", list(grobs=penvhist_grobs, nrow=5))
+}
+
+#
+
+
 ############################ ANALYSIS FUNCTIONS ##################################
 #------ read_GRDCgauged_paths -----------------
 #' Read file paths to streamflow data from GRDC gauging stations
@@ -2516,9 +3162,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
 #------ Analyze cluster sensitivity --------------------------------------------
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
-
-
-analyze_cluster_sensitivity <- function(in_cluster,
+analyze_cluster_sensitivity <- function(in_noflow_clusters,
                                         in_hydrostats_preformatted) {
   #Permute each variable
   kclass <- in_noflow_clusters$kclass
@@ -2546,7 +3190,7 @@ analyze_cluster_sensitivity <- function(in_cluster,
     new_clust <- fastcluster::hclust(hydro_dist, method=in_method) %>%
       dendextend::cutree(k=in_kclass, order_clusters_as_data = FALSE)
     
-    out_ari <- aricode::ARI(comp_clust, new_clust)
+    out_ari <- aricode::ARI(comp_clust_cut, new_clust)
   }
   
   hydrostats_ari <- future_lapply(cols_ix, function(col_to_permute) {
@@ -2607,6 +3251,68 @@ analyze_cluster_sensitivity <- function(in_cluster,
     gboot_clust = out_bootstats
     ))
 }
+
+#------ Analyze environmental correlates ---------------------------------------
+in_gaugep_dt <- tar_read(gaugep_dt)
+in_noflow_clusters <- tar_read(noflow_clusters)
+in_predvars <- tar_read(predvars)
+
+
+analyze_env_correlates <- function(in_noflow_clusters,
+                                   in_gaugep_dt,
+                                   in_predvars,
+                                   gires_qs_path
+                                   ) {
+  #Read and compute derived variables for global river network
+  gires_net_dt <- qread(gires_qs_path) %>%
+    comp_derivedvar
+  
+  #Get gauges class and attributes
+  kclass <- in_noflow_clusters$kclass
+  in_gaugep_dt[, grdc_no := as.character(grdc_no)]
+  
+  gclass_dt <- in_noflow_clusters$cluster_analyses[[
+    paste0('ncl', kclass)]]$class_dt %>%
+    .[!duplicated(grdc_no), .(grdc_no, gclass)] %>%
+    merge(in_gaugep_dt[, -c('UPLAND_SKM', 'LENGTH_KM'), with=F], 
+          by='grdc_no') %>%
+    merge(gires_net_dt, by='HYRIV_ID', all.y=F) 
+  
+  #Analyze relationship between predicted probability of intermittence
+  #and classes
+  giresprob_class_p <- ggplot(melt(gclass_dt, id.vars=c('gclass','grdc_no'), 
+              measure.vars = c('predprob1', 'predprob30')),
+         aes(x=gclass, y=value, fill=variable)) +
+    geom_boxplot() +
+    scale_fill_discrete(
+      name=str_wrap('Predicted mean annual probability of no-flow', 25),
+      labels=c('At least 1 day/year', 'At least 30 day/year')
+    ) +
+    theme_classic()
+  
+  #Compute density distributions of gauges and entire network of non-perennial rivers
+  envhist <- layout_ggenvhist(
+    in_rivernetwork = gires_net_dt[predprob1>=0.5,],
+    in_gaugepred = gclass_dt ,
+    in_predvars = in_predvars)
+  
+  #Calculating standardized bias and Wasserstein distance for each variable
+  all_bias<-matrix(, nrow = dim(gagdata[,-1])[2], ncol = 3)
+  rownames(all_bias)<-t(VARnames)
+  all_bias<-cbind(VARnames,all_bias)
+  all_bias[,2]<-bias(gagdata[,-1],varmeans,type='standardized')
+  colnames(all_bias)<-c("Variable", "bias", "wasser","Direction")
+  
+return(list(
+  plot_giresprob_class = giresprob_class_p,
+  plot_envhist
+))    
+}
+
+
+#------ Link gauges to GIRES network -------------------------------------------
+
+
 
 
 ################### EXTRA STUFF ################################################

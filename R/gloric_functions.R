@@ -371,10 +371,11 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
 #Make a nice looking dendogram based on a clustering output
 prettydend_classes <- function(in_hclust, colorder=NULL, 
                                in_colors=NULL, in_labels=NULL,
-                               in_kclass=7, classnames = NULL) {
+                               in_kclass=7, classnames = NULL,
+                               order_clusters=F) {
   
   classr <- dendextend::cutree(in_hclust, k=in_kclass, 
-                               order_clusters_as_data = FALSE)
+                               order_clusters_as_data = order_clusters)
   classr_df <- data.frame(ID=names(classr), gclass=classr) 
   
   if (!is.null(classnames)) {
@@ -2098,7 +2099,8 @@ cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors,
   
   #Get dendrogram and class membership
   dendo_format <-prettydend_classes(in_hclust = in_hclust, 
-                                    in_kclass=in_kclass, in_colors=in_colors,
+                                    in_kclass=in_kclass, 
+                                    in_colors=in_colors,
                                     classnames= NULL)
   
   class_stats <- dendo_format$classes %>%
@@ -2512,8 +2514,8 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
 }
 
 #------ Analyze cluster sensitivity --------------------------------------------
-in_noflow_clusters <- tar_read(noflow_clusters)
-in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
+# in_noflow_clusters <- tar_read(noflow_clusters)
+# in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 
 
 analyze_cluster_sensitivity <- function(in_cluster,
@@ -2522,8 +2524,8 @@ analyze_cluster_sensitivity <- function(in_cluster,
   kclass <- in_noflow_clusters$kclass
   base_clust_reslist <- in_noflow_clusters$hclust_reslist_all[[
     in_noflow_clusters$chosen_hclust]]
-  base_hclust <- base_clust_reslist$hclust %>%
-    cutree(k=kclass)
+  base_hclust_cut <- base_clust_reslist$hclust %>%
+    dendextend::cutree(k=kclass, order_clusters_as_data = FALSE)
   hydrostats_mat <- in_hydrostats_preformatted$mat
   
   cols_ix <- seq(dim(hydrostats_mat)[2])
@@ -2531,7 +2533,7 @@ analyze_cluster_sensitivity <- function(in_cluster,
   
   #---------------- Compute variable importance in clustering ------------------
   get_col_ARI <- function(in_mat, col_ix, rows_ix, 
-                          in_method, in_kclass, comp_clust) {
+                          in_method, in_kclass, comp_clust_cut) {
     mat_permut <- in_mat
     mat_permut[,col_ix] <- mat_permut[
       sample(rows_ix, size=length(rows_ix), replace=FALSE),col_ix] 
@@ -2542,7 +2544,7 @@ analyze_cluster_sensitivity <- function(in_cluster,
       as.dist
     
     new_clust <- fastcluster::hclust(hydro_dist, method=in_method) %>%
-      cutree(k=in_kclass)
+      dendextend::cutree(k=in_kclass, order_clusters_as_data = FALSE)
     
     out_ari <- aricode::ARI(comp_clust, new_clust)
   }
@@ -2553,7 +2555,7 @@ analyze_cluster_sensitivity <- function(in_cluster,
                                            rows_ix=rows_ix,
                                            in_method=in_noflow_clusters$chosen_hclust,
                                            in_kclass=kclass,
-                                           comp_clust=base_hclust))
+                                           comp_clust_cut=base_hclust_cut))
     return(data.table(
       var = colnames(hydrostats_mat)[[col_to_permute]],
       ari = ari_list
@@ -2577,25 +2579,33 @@ analyze_cluster_sensitivity <- function(in_cluster,
     showplots=TRUE
   )
   
-  boot_clust$bootmean
-  boot_clust$bootbrd
-  boot_clust$bootrecover
+  base_hclust_cut_ordered <- base_clust_reslist$hclust %>%
+    dendextend::cutree(k=kclass, order_clusters_as_data = T) %>%
+    as.data.table(keep.rownames=T) %>%
+    setnames(c('grdc_no', 'gclass_ordered')) %>%
+    merge(
+      in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]$class_dt[
+        !duplicated(grdc_no), .(grdc_no, gclass)],
+      by='grdc_no')
   
+  
+  out_bootstats <- base_hclust_cut_ordered[
+    , .N, by=c('gclass', 'gclass_ordered')] %>%
+    .[order(gclass_ordered), `:=`(
+      bootmean = boot_clust$bootmean,
+      bootbrd = boot_clust$bootbrd,
+      bootrecover = boot_clust$bootrecover
+    )]
+
   #clusters with a stability value less than 0.6 should be considered unstable. 
   #Values between 0.6 and 0.75 indicate that the cluster is measuring a pattern 
   #in the data, but there isn’t high certainty about which points should be 
   #clustered together
-    
-  }
-
   
-  
-  
-  #Remove each gauge
-
-  #Compute Adjusted Rand Index
-  #Compute cophenetic correlation between trees
-
+  return(list(
+    var_imp_ari = hydrostats_ari,
+    gboot_clust = out_bootstats
+    ))
 }
 
 

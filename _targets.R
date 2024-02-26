@@ -289,6 +289,12 @@ list(
                                   max_miss_sel = 0,
                                   noflow_qthresh = 0.001
     ) 
+  ),
+  
+  tar_target(
+    cluster_sensitivity,
+    analyze_cluster_sensitivity(in_cluster,
+                                in_hydrostats_preformatted)
   )
 )
 

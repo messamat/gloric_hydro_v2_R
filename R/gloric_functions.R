@@ -1189,6 +1189,158 @@ layout_ggenvhist <- function(in_rivernetwork, in_gaugepred, in_predvars) {
 #
 
 
+#------ reckless_KLdiv  -------------------------------------------------------
+#Adapted from rags2ridges to make it faster by not checking for symmetry
+reckless_KLdiv <- function(Mtest, Mref, Stest, Sref, symmetric = FALSE){
+if (!inherits(Mtest, "numeric")){
+  stop("Input (Mtest) is of wrong class")
+}
+else if (!inherits(Mref, "numeric")){
+  stop("Input (Mref) is of wrong class")
+}
+else if (length(Mtest) != length(Mref)){
+  stop("Mtest and Mref should be of same length")
+}
+else if (!is.matrix(Stest)){
+  stop("Input (Stest) is of wrong class")
+}
+else if (!is.matrix(Sref)){
+  stop("Input (Sref) is of wrong class")
+}
+# else if (!isSymmetric(Stest)){ #isSymmetric takes a lot of time
+#   stop("Stest should be symmetric")
+# }
+# else if (!isSymmetric(Sref)){
+#   stop("Sref should be symmetric")
+# }
+else if (dim(Stest)[1] != length(Mtest)){
+  stop("Column and row dimension of Stest should correspond to length Mtest")
+}
+else if (dim(Sref)[1] != length(Mref)){
+  stop("Column and row dimension of Sref should correspond to length Mref")
+}
+else if (!inherits(symmetric, "logical")){
+  stop("Input (symmetric) is of wrong class")
+}
+else {
+  # Evaluate KL divergence
+  KLd <- (sum(diag(solve(Stest) %*% Sref)) +
+            t(Mtest - Mref) %*% solve(Stest) %*% (Mtest - Mref) -
+            nrow(Sref) - log(det(Sref)) + log(det(Stest)))/2
+  
+  # Evaluate (original) symmetric version KL divergence
+  if (symmetric){
+    KLd <- KLd + (sum(diag(solve(Sref) %*% Stest)) +
+                    t(Mref - Mtest) %*% solve(Sref) %*% (Mref - Mtest) -
+                    nrow(Sref) - log(det(Stest)) + log(det(Sref)))/2
+  }
+  
+  # Return
+  return(as.numeric(KLd))
+}
+}
+
+#------ reckless_ridgeP  -------------------------------------------------------
+#Adapted from rags2ridges to make it faster by not checking for symmetry
+reckless_ridgeP <- function(S, lambda, type = "Alt", 
+                            target = rags2ridges::default.target(S)){
+  ##############################################################################
+  # - NOTES:
+  # - When type = "Alt" and target is p.d., one obtains the
+  #   van Wieringen-Peeters type I estimator
+  # - When type = "Alt" and target is null-matrix, one obtains the
+  #   van Wieringen-Peeters type II estimator
+  # - When target is not the null-matrix it is expected to be p.d. for the
+  #   vWP type I estimator
+  # - The target is always expected to be p.d. in case of the archetypal I
+  #   estimator
+  # - When type = "Alt" and target is null matrix or of form c * diag(p), a
+  #   rotation equivariant estimator ensues. In these cases the expensive
+  #   matrix square root can be circumvented
+  ##############################################################################
+  
+  # if (!isSymmetric(S)) {
+  #   stop("S should be a symmetric matrix")
+  # }
+  if (lambda <= 0) {
+    stop("lambda should be positive")
+  }
+  else if (!(type %in% c("Alt", "ArchI", "ArchII"))){
+    stop("type should be one of {'Alt', 'ArchI', 'ArchII'}")
+  }
+  
+  # Calculate Ridge estimator
+  # Alternative estimator
+  if (type == "Alt"){
+    # if (!isSymmetric(target)) {
+    #   stop("Shrinkage target should be symmetric")
+    # } else
+    if (dim(target)[1] != dim(S)[1]) {
+      stop("S and target should be of the same dimension")
+    } else {
+      P <- rags2ridges:::.armaRidgeP(S, target, lambda)
+    }
+    dimnames(P) <- dimnames(S)
+  }
+  
+  # Archetypal I
+  if (type == "ArchI"){
+    if (lambda > 1){
+      stop("lambda should be in (0,1] for this type of Ridge estimator")
+    } 
+    # else if (!isSymmetric(target)){
+    #   stop("Shrinkage target should be symmetric")
+    else if (dim(target)[1] != dim(S)[1]){
+      stop("S and target should be of the same dimension")
+    } else if (any(eigen(target, symmetric = TRUE,
+                         only.values = TRUE)$values <= 0)){
+      stop("Target should always be p.d. for this type of ridge estimator")
+    } else {
+      P <- solve((1 - lambda) * S + lambda * solve(target))
+    }
+  }
+  
+  # Archetypal II
+  if (type == "ArchII"){
+    P <- solve(S + lambda * diag(nrow(S)))
+  }
+  
+  # Set class and return
+  attr(P, "lambda") <- lambda
+  class(P) <- c("ridgeP", class(P))
+  return(rags2ridges::symm(P))
+}
+
+
+#------ get_KLdiv --------------------------------------------------------------
+#Adapted from rags2ridges]
+get_KLdiv <- function(comp_mat, ref_mat=NULL, cov_ref=NULL, mean_ref=NULL) {
+  #Compute multivariate covariance and mean of ref data
+  if (is.null(cov_ref)) {
+    cov_ref  <-  rags2ridges::covML(as.matrix(ref_mat))
+  }
+  
+  if (is.null(mean_ref)) {
+    mean_ref <- colMeans(as.matrix(ref_mat))
+  }
+  
+  #Compute multivariate covariance and mean of comparison data
+  cov_comp  <- rags2ridges::covML(comp_mat)
+  mean_comp <- colMeans(comp_mat)
+  
+  ## Regularize singular Cov1
+  P <- reckless_ridgeP(cov_comp, nrow(comp_mat))
+  cov_compreg<- solve(P)
+  
+  ## Obtain KL divergence
+  KLdiv_out <-  reckless_KLdiv(mean_comp, mean_ref, cov_compreg, cov_ref)
+  
+  return(list(
+    cov_ref = cov_ref,
+    mean_ref = mean_ref,
+    KLdiv = KLdiv_out
+  ))
+}
 ############################ ANALYSIS FUNCTIONS ##################################
 #------ read_GRDCgauged_paths -----------------
 #' Read file paths to streamflow data from GRDC gauging stations
@@ -3327,12 +3479,13 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_predvars <- tar_read(predvars)
 
-analyze_env_correlates <- function(in_noflow_clusters,
-                                   in_gaugep_dt,
-                                   in_predvars,
-                                   gires_qs_path
-                                   ) {
+analyze_gauge_representativeness <- function(in_noflow_clusters,
+                                             in_gaugep_dt,
+                                             in_predvars,
+                                             gires_qs_path
+) {
   #Read and compute derived variables for global river network
+  print('Read network')
   gires_net_dt <- qread(gires_qs_path) %>%
     comp_derivedvar
   
@@ -3362,20 +3515,21 @@ analyze_env_correlates <- function(in_noflow_clusters,
   #names(gclass_dt)
 
   #Compute density distributions of gauges and entire network of non-perennial rivers
-  # envhist <- layout_ggenvhist(
-  #   in_rivernetwork = gires_net_dt[predprob1>=0.5,],
-  #   in_gaugepred = gclass_dt,
-  #   in_predvars = in_predvars)
+  print('Make distribution plot')
+  envhist <- layout_ggenvhist(
+    in_rivernetwork = gires_net_dt[predprob1>=0.5,],
+    in_gaugepred = gclass_dt,
+    in_predvars = in_predvars)
   
-  #Scale data for computing Wasserstein distance
+  #Scale data for computing distributional distance ----------------------------
   cols_to_analyze <- c(
     "bio1_dc_uav", "bio7_dc_uav", "bio11_dc_uav",
-    "bio12_mm_uav", "bio14_mm_uav", "clz_cl_cmj",
+    "bio12_mm_uav", "bio14_mm_uav",
     "ari_ix_uav", "dis_m3_pyr", "sdis_ms_uyr", "UPLAND_SKM",
     "lka_pc_use", "snw_pc_uyr", "kar_pc_use", "for_pc_use") %>%
     .[. %in% names(gires_net_dt)]
   
-  #Scale network --------------------------------------------------------------
+  #Scale network data ----------------------------------------------------------
   net_scaling_parameters <- lapply(cols_to_analyze, function(in_col) {
     print(in_col)
     transform_scale_vars(in_dt=gires_net_dt,
@@ -3386,14 +3540,13 @@ analyze_env_correlates <- function(in_noflow_clusters,
   })
   scaling_parameters_dt <- data.table::rbindlist(net_scaling_parameters) %>%
     .[, col := cols_to_analyze]
-  
 
-  #Scale gauges ----------------------------------------------------------------
+  #Scale gauges data -----------------------------------------------------------
   gclass_dt_trans <- copy(gclass_dt)
 
   transform_column_wpars <- function(in_dt, in_col, pars) {
-    floor_par <- ifelse(pars$min_val < 0, pars$min_floor - pars$min_val, 0)
-    in_dt <- in_dt[!is.na(get(in_col)), 
+    floor_par <- ifelse(pars$min_val <= 0, pars$min_floor - pars$min_val, 0)
+    in_dt <- in_dt[, 
                    (in_col) := (BoxCox(get(in_col) + floor_par, 
                                        lambda = pars$bc_lambda) 
                                 - pars$trans_mean) / pars$trans_sd]
@@ -3404,9 +3557,9 @@ analyze_env_correlates <- function(in_noflow_clusters,
     pars <- scaling_parameters_dt[col == in_col, ]
     transform_column_wpars(in_dt=gclass_dt_trans, in_col, pars)
   })
-  
-  
+
   #Compute overall Wasserstein distance for each variable ----------------------
+  print('Compute overall Wasserstein distance for each variable ')
   gires_varmeans <- gires_net_dt[predprob1>=0.5,
                                  lapply(.SD, mean), 
                                  .SDcols = cols_to_analyze]
@@ -3421,9 +3574,11 @@ analyze_env_correlates <- function(in_noflow_clusters,
   wasser_dt <- lapply(cols_to_analyze, function(in_col) {
     print(in_col)
     if (gclass_dt_trans[!is.na(get(in_col)), .N]>0) {
+      #Take a sample of full dataset
       n_segs <- gires_net_dt[predprob1>=0.5 & !is.na(get(in_col)), .N]
       net_samp <- sample(n_segs, n_segs/10)
       
+      #Compute Wasserstein distance
       wassd <- waddR::wasserstein_metric(
         x=gires_net_dt[predprob1>=0.5 & !is.na(get(in_col)),][net_samp,get(in_col)],
         y=gclass_dt_trans[!is.na(get(in_col)), get(in_col)],
@@ -3434,73 +3589,41 @@ analyze_env_correlates <- function(in_noflow_clusters,
     return(data.table(variable=in_col, wasser=wassd))
   }) %>% rbindlist
   
-  #Try computing multivariate Kullback-Leibler divergence ----------------------
-  #https://cfwp.github.io/rags2ridges/
-  #
-  # if (!requireNamespace("BiocManager", quietly = TRUE))
-  #   install.packages("BiocManager")
-  # BiocManager::install(c("RBGL"))
-  # renv::install('rags2ridges')
-  # 
-
-  get_KLdiv <- function(comp_dt, ref_dt=NULL, cov_ref=NULL, mean_ref=NULL) {
-    #Compute multivariate covariance and mean of ref data
-    if (is.null(cov_ref)) {
-      cov_ref  <-  rags2ridges::covML(as.matrix(ref_dt))
-    }
- 
-    if (is.null(mean_ref)) {
-      mean_ref <- colMeans(as.matrix(ref_dt))
-    }
-    
-    #Compute multivariate covariance and mean of comparison data
-    cov_comp  <- rags2ridges::covML(as.matrix(comp_dt))
-    mean_comp <- colMeans(as.matrix(comp_dt))
-    
-    ## Regularize singular Cov1
-    P <- rags2ridges::ridgeP(cov_comp, nrow(comp_dt))
-    cov_compreg<- solve(P)
-    
-    ## Obtain KL divergence
-    KLdiv_out <- rags2ridges::KLdiv(mean_comp, mean_ref, cov_compreg, cov_ref)
-    
-    return(list(
-      cov_ref = cov_ref,
-      mean_ref = mean_ref,
-      KLdiv = KLdiv_out
-    ))
-  }
-
-  KLdiv_current <- get_KLdiv(
-    comp_dt=gclass_dt_trans[, cols_to_analyze, with=F],
-    ref_dt=gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F]
-  )
+  univar_dist <- merge(bias_dt, wasser_dt, by='variable')
   
-  profvis({
-  gires_net_dt[
-    predprob1>=0.5,][1:10000, 
+  #Optimize gains in multivariate gauge-network similarity -----------------------
+  #For each ungauged river reach, compute the change in Kullback-Leibler 
+  #divergence between the gauge multivariate normal distribution and that of the 
+  #network if a gauge was placed on that reach
+  #https://cfwp.github.io/rags2ridges/
+  print('Compute Kullback-Leibler divergence ')
+  in_comp_mat <- as.matrix(gclass_dt_trans[, cols_to_analyze, with=F])
+  in_ref_mat <- as.matrix(gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F])
+  
+  KLdiv_current <- get_KLdiv(
+    comp_mat=rbind(in_comp_mat, in_ref_mat[1,]),
+    ref_mat=as.matrix(gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F])
+  )
+
+  KLdiv_marginal <- gires_net_dt[
+    predprob1>=0.5, 
     get_KLdiv(
-      comp_dt = rbind(
-        gclass_dt_trans[, cols_to_analyze, with=F],
-        .SD),
+      comp_mat = rbind(
+        in_comp_mat,
+        as.matrix(.SD)),
       cov_ref = KLdiv_current$cov_ref,
       mean_ref = KLdiv_current$mean_ref)$KLdiv,
     by='HYRIV_ID',
-    .SDcols = cols_to_analyze]
-  })
-  
-  
-  
-  
-  # Calculating change in global bias with addition of gauge -------------------
-  # calculate the overall change in global bias in gauge placement (averaged across all variables) 
-  # if a new gauge were installed
-  
+    .SDcols = cols_to_analyze] %>%
+    .[, list(
+      HYRIV_ID,
+      KLdiv_diff = V1 - KLdiv_current$KLdiv)]
 
-  merge(bias_dt, wasser_dt, by='variable')
 return(list(
   plot_giresprob_class = giresprob_class_p,
-  plot_envhist
+  plot_envhist = envhist,
+  univar_dist =  univar_dist,
+  KLdiv_marginal = KLdiv_marginal
 ))    
 }
 

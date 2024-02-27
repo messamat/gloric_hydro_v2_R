@@ -55,5 +55,10 @@ suppressWarnings(library(vegan))
 suppressWarnings(library(viridis))
 suppressWarnings(library(waddR)) #devtools::install_github("goncalves-lab/waddR")
 
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# BiocManager::install(c("RBGL"))
+# renv::install('rags2ridges')
+
 
 

@@ -319,10 +319,18 @@ list(
     analyze_cluster_sensitivity(
       in_noflow_clusters = noflow_clusters,
       in_hydrostats_preformatted = noflow_hydrostats_preformatted)
+  ),
+  
+  tar_target(
+    gauge_representativeness,
+    analyze_gauge_representativeness(in_noflow_clusters=noflow_clusters,
+                                     in_gaugep_dt=gaugep_dt,
+                                     in_predvars=predvars,
+                                     gires_qs_path=gires_qs_path
+    )
   )
+
 )
-
-
 
 
 # tar_target(outlier_plot,

@@ -57,7 +57,6 @@ list(
   ,  
   
   
-  
   #------------------------------ Read files -----------------------------------
   tar_target(GRDC_metadata,
              read_xlsx(path_GRDC_metadata, sheet = 'station_catalogue') %>%
@@ -295,7 +294,6 @@ list(
                                  noflow_hydrostats_preformatted)
   ),
   
-  
   tar_target(
     out_gaugesp_path,
     export_gauges_classes(in_noflow_clusters=noflow_clusters,
@@ -329,7 +327,6 @@ list(
                                      gires_qs_path=gires_qs_path
     )
   )
-
 )
 
 

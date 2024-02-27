@@ -407,17 +407,25 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
       , bc_lambda := 0.5*round(
         Rfast::bc(samp(value_pos), low=-1, up=2)/0.5), 
       by=var_col]
+    
+    dt_trans[, value_trans := fifelse(
+      bc_lambda == 0,
+      log(value_pos),
+      ((value_pos^bc_lambda)-1)/bc_lambda
+    ), by=var_col]
   } else {
     bc_lambda <- 0.5*round(
       Rfast::bc(samp(dt_trans$value_pos), low=-1, up=2)/0.5)
+    
+    if (bc_lambda[[1]] == 0) {
+      dt_trans[, value_trans := log(value_pos), 
+               by=var_col]
+    } else {
+      dt_trans[, value_trans := ((value_pos^bc_lambda[[1]])-1)/bc_lambda[[1]],
+               by=var_col]
+    }
   }
-  
-  dt_trans[, value_trans := fifelse(
-    bc_lambda == 0,
-    log(value_pos),
-    ((value_pos^bc_lambda)-1)/bc_lambda
-  ), by=var_col]
-  
+
   if (is.null(var_col)) {
     trans_mean <- mean(dt_trans$value_trans, na.rm=T)
     trans_sd <- sd(dt_trans$value_trans, na.rm=T)
@@ -614,7 +622,7 @@ rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
   # })
   
   nbclust_tests <- NbClust(data=in_mat, distance='euclidean',
-                           index=idx_totest,
+                           #index=idx_totest,
                            min.nc=min_nc, max.nc=max_nc, method=in_method)
   
   return(list(

@@ -398,10 +398,9 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
     }
   } else {
     samp <- function(x) {
-      xS
+      x
     }
   }
-  
   
   if (!is.null(var_col)) {
     dt_trans[
@@ -409,17 +408,15 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
         Rfast::bc(samp(value_pos), low=-1, up=2)/0.5), 
       by=var_col]
   } else {
-    bc_lambda <- list(0.5*round(
-      Rfast::bc(samp(dt_trans$value_pos), low=-1, up=2)/0.5))
+    bc_lambda <- 0.5*round(
+      Rfast::bc(samp(dt_trans$value_pos), low=-1, up=2)/0.5)
   }
   
-  if (bc_lambda[[1]] == 0) {
-    dt_trans[, value_trans := log(value_pos), 
-             by=var_col]
-  } else {
-    dt_trans[, value_trans := ((value_pos^bc_lambda[[1]])-1)/bc_lambda[[1]],
-             by=var_col]
-  }
+  dt_trans[, value_trans := fifelse(
+    bc_lambda == 0,
+    log(value_pos),
+    ((value_pos^bc_lambda)-1)/bc_lambda
+  ), by=var_col]
   
   if (is.null(var_col)) {
     trans_mean <- mean(dt_trans$value_trans, na.rm=T)
@@ -430,7 +427,7 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
   dt_trans[
     , value_scaled := scale(value_trans, center=TRUE, scale=TRUE), 
     by=var_col]
-
+  
   return_list <- list()
   
   if (!inplace) {
@@ -487,7 +484,7 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
   chosen_h <- in_hclust$height[length(in_hclust$height) - (in_kclass-1)]
   dendname_cut <- as.dendrogram(in_hclust) %>%
     cut(h=chosen_h)
-
+  
   #Get a basic dendrogram with the right colors
   ggdendro_p <- dendname_cut$upper %>%
     dendextend::set("branches_lwd", 1) %>% #Set is also present in data.table, so important to use dendextend:: as package order varies in tar_make
@@ -524,7 +521,7 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
               fill='white') +
     geom_text(data = new_classlabels, 
               aes(x = x, y = 0.94*min(hori_segs$yend), label = label, 
-                         colour = col, size = cex), 
+                  colour = col, size = cex), 
               hjust=0, angle = 0) +
     coord_flip(ylim=c(limits=c(max(dend_segs$yend), 0.85*min(hori_segs$yend))), #min(hori_segs$yend)
                clip='on') +
@@ -542,6 +539,212 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
   return(list(classes=classr_df, 
               plot=ggdendro_p_format))
 }
+#------ rundiagnose_clustering ------------------------------------------------
+rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
+                                   dist_name="Euclidean distance"
+) {
+  print(in_method)
+  hclust_res <- hclust(in_dist, method=in_method)
+  
+  #Compute cophenetic correlation --------------------------------------------
+  cophcor <- cor(in_dist, cophenetic(hclust_res))
+  
+  dist_cophcor_dt <- merge(
+    reshape2::melt(as.matrix(in_dist)),
+    reshape2::melt(as.matrix(cophenetic(hclust_res))),
+    by=c('Var1', 'Var2')) %>%
+    setnames(c('value.x', 'value.y'), 
+             c(dist_name, "Cophenetic dissimilarity"))
+  
+  #Plot cophenetic correlation------------------------------------------------
+  p_cophcor <- ggplot(dist_cophcor_dt, 
+                      aes(x=get(dist_name), y=`Cophenetic dissimilarity`)) +
+    geom_point() +
+    geom_smooth(method='lm') +
+    annotate('text', x = 0.5, y=0.1,
+             label=paste('Cophenetic correlation =', 
+                         round(cophcor, 2))) +
+    coord_cartesian(
+      expand=F, 
+      ylim=c(0, max(dist_cophcor_dt$`Cophenetic dissimilarity`)+0.05)) +
+    theme_classic()
+  
+  #Mantel test ---------------------------------------------------------------
+  clust_mantel <- vegan::mantel(
+    xdis = in_dist,
+    ydis = cophenetic(hclust_res),
+    method = "pearson",
+    permutations = 999
+  )
+  
+  #Graph scree plot ----------------------------------------------------------
+  scree_dt <- data.table(height=hclust_res$height,
+                         groups=length(hclust_res$height):1)
+  
+  p_scree <- ggplot(scree_dt,
+                    aes(x=groups, y=height)) +
+    geom_point() +
+    geom_line() + 
+    scale_x_log10(breaks=c(1,5,10,20,50,100,max(scree_dt$groups))) +
+    theme_bw()
+  
+  #Agglomerative coefficient -------------------------------------------------
+  if (in_method !='median') {
+    ag_coef <- coef.hclust(hclust_res)
+  } else {
+    ag_coef <- NA
+  }
+  
+  #NbClust to determine number of clusters -----------------------------------
+  # vc_methods <- c("kl","ch", "hartigan","ccc", "scott","marriot","trcovw", 
+  #                "tracew","friedman", "rubin", "cindex", "db", "silhouette", 
+  #                "duda", "beale", "ratkowsky", "ball", "ptbiserial", "pseudot2", 
+  #                "gap", "frey", "mcclain", # "gamma", 
+  #                "gplus", "tau", "dunn", 
+  #                "hubert", "sdindex", "dindex", "sdbw", "alllong")
+  # 
+  # nbclust_tests <- lapply(vc_methods, function(vc_method){
+  #   print(vc_method)
+  #   tryCatch({
+  #     en.nb <- NbClust(in_mat, distance = "euclidean", min.nc = min_nc,
+  #                      max.nc = max_nc, method =in_method, 
+  #                      index = vc_method)
+  #     return(as.numeric(en.nb$Best.nc[1]))
+  #   }, error=function(e){cat("ERROR :",conditionMessage(e), "\n")})
+  # })
+  
+  nbclust_tests <- NbClust(data=in_mat, distance='euclidean',
+                           index=idx_totest,
+                           min.nc=min_nc, max.nc=max_nc, method=in_method)
+  
+  return(list(
+    hclust=hclust_res,
+    cophcor = cophcor,
+    p_cophcor = p_cophcor,
+    ag_coef = ag_coef,
+    scree_dt = scree_dt,
+    p_scree = p_scree,
+    clust_mantel = clust_mantel,
+    nbclust_tests = nbclust_tests
+  ))
+}
+
+#------ cuttree_and_visualize --------------------------------------------------
+cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors, 
+                                  in_meltdt, id_col, 
+                                  value_col='value', variable_col='variable',
+                                  aspect_col = 'aspect', classnames= NULL) {
+  
+  #Get dendrogram and class membership
+  dendo_format <-prettydend_classes(in_hclust = in_hclust, 
+                                    in_kclass=in_kclass, 
+                                    in_colors=in_colors,
+                                    classnames= NULL)
+  
+  class_stats <- dendo_format$classes %>%
+    as.data.table %>%
+    .[, classn := .N, by='gclass'] %>%
+    merge(in_meltdt, ., by.x=id_col, by.y='ID') %>%
+    .[, gclass := factor(gclass, levels=sort(unique(gclass)))]
+  
+  #Test classification significance ------------------------------------------
+  mat_dt <- in_mat %>%
+    as.data.table %>%
+    .[, (id_col) := rownames(in_mat)] %>%
+    merge(dendo_format$classes, 
+          by.x=id_col, by.y='ID') 
+  
+  #Check if classes are multivariate normal
+  mshapirotest_classes <- lapply(
+    mat_dt[, .N, by=gclass][N>=20, gclass],
+    function(in_gclass) {
+      #print(in_gclass)
+      subdt <- mat_dt[gclass==in_gclass,]
+      
+      #Replace NA values
+      subdt[, (names(subdt)) := sapply(
+        .SD, function(x) suppressWarnings(zoo::na.aggregate(x)), simplify=F)]
+      
+      mat <- as.matrix(subdt[
+        , -c(id_col, names(subdt)[!subdt[, sapply(.SD, uniqueN)] > 1]),
+        with=F])
+      rownames(mat) <- subdt[, get(id_col)]
+      
+      
+      varcormat <- cor(mat)
+      varcormat[lower.tri(varcormat)] <- NA
+      
+      vartoremove <- reshape2::melt(varcormat) %>%
+        as.data.table %>%
+        .[Var1 != Var2,] %>%
+        .[abs(value) > 0.98, as.character(Var2)]
+      
+      if (length(vartoremove)>1) {
+        sub_mat <- mat[, -which(colnames(mat) %in% vartoremove)]
+      } else {
+        sub_mat <- mat
+      }
+      
+      shapiro_test <- t(sub_mat) %>%
+        mvnormtest::mshapiro.test()
+      
+      return(list(
+        gclass=in_gclass,
+        shapiro_test=shapiro_test)
+      )
+    })
+  
+  #Test significant difference by stat
+  # set up model
+  diff_letters <- lapply(unique(class_stats$variable), function(var) {
+    sub_dat <- class_stats[variable==var,]
+    
+    emmeans(lm(as.formula(paste(value_col, '~ gclass')), 
+               data = sub_dat),
+            specs = as.formula('~ gclass') 
+    ) %>%
+      cld(adjust = "sidak",
+          Letters = letters,
+          alpha = 0.05) %>%
+      as.data.table %>%
+      .[, variable := var]  %>%
+      setnames('.group', 'grp_letter')
+  }) %>% 
+    rbindlist %>%
+    merge(class_stats[!duplicated(paste0(variable, gclass)),
+                      .(variable, aspect, gclass, classn)], 
+          by=c('variable', 'gclass')) 
+  
+  #Get box plot
+  p_cluster_boxplot <- ggplot(
+    class_stats, 
+    aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    facet_wrap(factor(get(variable_col),
+                      levels=levels(class_stats[[variable_col]]))
+               ~get(aspect_col), 
+               scales='free', ncol=4) +
+    geom_text(data=diff_letters[classn > 1,], 
+              aes(x=gclass, label=grp_letter, y=emmean), 
+              color='black', alpha=0.6) +
+    scale_y_continuous(name='Metric value') +
+    scale_x_discrete(name='Class') +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') + 
+    theme_bw() +
+    theme(legend.position = 'none',
+          panel.grid = element_blank())
+  
+  return(list(
+    class_dt = class_stats,
+    p_dendo = dendo_format$plot,
+    p_boxplot = p_cluster_boxplot,
+    class_stats = diff_letters
+  )
+  )
+}
+
 #------ selectformat_predvars -----------------
 #' Select + format predictor variables
 #'
@@ -585,7 +788,7 @@ selectformat_predvars <- function(inp_riveratlas_meta, in_gaugestats) {
     'snw_pc_cyr',
     'snw_pc_cmx',
     'glc_cl_cmj',
-
+    
     'pnv_cl_cmj',
     'for_pc_use',
     'for_pc_cse',
@@ -606,7 +809,7 @@ selectformat_predvars <- function(inp_riveratlas_meta, in_gaugestats) {
     'slt_pc_uav',
     'snd_pc_cav',
     'snd_pc_uav',
-
+    
     'ari_ix_cav',
     'ari_ix_uav',
     'bio1_dc_cav',
@@ -622,7 +825,7 @@ selectformat_predvars <- function(inp_riveratlas_meta, in_gaugestats) {
     'bio13_mm_cav',
     'bio14_mm_cav',
     'bio15_mm_cav',
-
+    
     'bio1_dc_uav',
     'bio2_dc_uav',
     'bio3_dc_uav',
@@ -930,16 +1133,16 @@ comp_derivedvar <- function(in_dt, copy=FALSE) {
   #---- Compute derived predictor variables ----
   print('Compute derived predictor variables')
   in_dt2[, `:=`(
-      #min/max monthly watershed discharge
-      dis_m3_pvar=fifelse(dis_m3_pmx==0, 1, dis_m3_pmn/dis_m3_pmx),
-      #min monthly/average yearly watershed discharge
-      dis_m3_pvaryr=fifelse(dis_m3_pyr==0, 1, dis_m3_pmn/dis_m3_pyr),
-      #runoff coefficient (runoff/precipitation)
-      runc_ix_cyr = fifelse(bio12_mm_cav==0, 0, run_mm_cyr/bio12_mm_cav),
-      #Specific discharge
-      sdis_ms_uyr = dis_m3_pyr/UPLAND_SKM,
-      sdis_ms_umn = dis_m3_pmn/UPLAND_SKM
-    )]
+    #min/max monthly watershed discharge
+    dis_m3_pvar=fifelse(dis_m3_pmx==0, 1, dis_m3_pmn/dis_m3_pmx),
+    #min monthly/average yearly watershed discharge
+    dis_m3_pvaryr=fifelse(dis_m3_pyr==0, 1, dis_m3_pmn/dis_m3_pyr),
+    #runoff coefficient (runoff/precipitation)
+    runc_ix_cyr = fifelse(bio12_mm_cav==0, 0, run_mm_cyr/bio12_mm_cav),
+    #Specific discharge
+    sdis_ms_uyr = dis_m3_pyr/UPLAND_SKM,
+    sdis_ms_umn = dis_m3_pmn/UPLAND_SKM
+  )]
   return(in_dt2)
 }
 
@@ -1192,52 +1395,52 @@ layout_ggenvhist <- function(in_rivernetwork, in_gaugepred, in_predvars) {
 #------ reckless_KLdiv  -------------------------------------------------------
 #Adapted from rags2ridges to make it faster by not checking for symmetry
 reckless_KLdiv <- function(Mtest, Mref, Stest, Sref, symmetric = FALSE){
-if (!inherits(Mtest, "numeric")){
-  stop("Input (Mtest) is of wrong class")
-}
-else if (!inherits(Mref, "numeric")){
-  stop("Input (Mref) is of wrong class")
-}
-else if (length(Mtest) != length(Mref)){
-  stop("Mtest and Mref should be of same length")
-}
-else if (!is.matrix(Stest)){
-  stop("Input (Stest) is of wrong class")
-}
-else if (!is.matrix(Sref)){
-  stop("Input (Sref) is of wrong class")
-}
-# else if (!isSymmetric(Stest)){ #isSymmetric takes a lot of time
-#   stop("Stest should be symmetric")
-# }
-# else if (!isSymmetric(Sref)){
-#   stop("Sref should be symmetric")
-# }
-else if (dim(Stest)[1] != length(Mtest)){
-  stop("Column and row dimension of Stest should correspond to length Mtest")
-}
-else if (dim(Sref)[1] != length(Mref)){
-  stop("Column and row dimension of Sref should correspond to length Mref")
-}
-else if (!inherits(symmetric, "logical")){
-  stop("Input (symmetric) is of wrong class")
-}
-else {
-  # Evaluate KL divergence
-  KLd <- (sum(diag(solve(Stest) %*% Sref)) +
-            t(Mtest - Mref) %*% solve(Stest) %*% (Mtest - Mref) -
-            nrow(Sref) - log(det(Sref)) + log(det(Stest)))/2
-  
-  # Evaluate (original) symmetric version KL divergence
-  if (symmetric){
-    KLd <- KLd + (sum(diag(solve(Sref) %*% Stest)) +
-                    t(Mref - Mtest) %*% solve(Sref) %*% (Mref - Mtest) -
-                    nrow(Sref) - log(det(Stest)) + log(det(Sref)))/2
+  if (!inherits(Mtest, "numeric")){
+    stop("Input (Mtest) is of wrong class")
   }
-  
-  # Return
-  return(as.numeric(KLd))
-}
+  else if (!inherits(Mref, "numeric")){
+    stop("Input (Mref) is of wrong class")
+  }
+  else if (length(Mtest) != length(Mref)){
+    stop("Mtest and Mref should be of same length")
+  }
+  else if (!is.matrix(Stest)){
+    stop("Input (Stest) is of wrong class")
+  }
+  else if (!is.matrix(Sref)){
+    stop("Input (Sref) is of wrong class")
+  }
+  # else if (!isSymmetric(Stest)){ #isSymmetric takes a lot of time
+  #   stop("Stest should be symmetric")
+  # }
+  # else if (!isSymmetric(Sref)){
+  #   stop("Sref should be symmetric")
+  # }
+  else if (dim(Stest)[1] != length(Mtest)){
+    stop("Column and row dimension of Stest should correspond to length Mtest")
+  }
+  else if (dim(Sref)[1] != length(Mref)){
+    stop("Column and row dimension of Sref should correspond to length Mref")
+  }
+  else if (!inherits(symmetric, "logical")){
+    stop("Input (symmetric) is of wrong class")
+  }
+  else {
+    # Evaluate KL divergence
+    KLd <- (sum(diag(solve(Stest) %*% Sref)) +
+              t(Mtest - Mref) %*% solve(Stest) %*% (Mtest - Mref) -
+              nrow(Sref) - log(det(Sref)) + log(det(Stest)))/2
+    
+    # Evaluate (original) symmetric version KL divergence
+    if (symmetric){
+      KLd <- KLd + (sum(diag(solve(Sref) %*% Stest)) +
+                      t(Mref - Mtest) %*% solve(Sref) %*% (Mref - Mtest) -
+                      nrow(Sref) - log(det(Stest)) + log(det(Sref)))/2
+    }
+    
+    # Return
+    return(as.numeric(KLd))
+  }
 }
 
 #------ reckless_ridgeP  -------------------------------------------------------
@@ -2329,7 +2532,7 @@ compute_metastatistics_util <- function(in_outliers_path, in_no) {
     #   geom_line(color='grey') +
     #   geom_line(data=in_dt_clean[is.na(Qobs)], size=1.1) +
     #   theme_bw()
-
+    
     #Compute number of missing days depending on the maximum interpolated gap
     #as well as the number of "no-flow" records depending on flow threshold
     metastats_dt <- in_dt_clean[, list(
@@ -2347,7 +2550,7 @@ compute_metastatistics_util <- function(in_outliers_path, in_no) {
           year %in% .SD[missingdays_edit_interp10 < 15,year],
           quantile(Qobs_interp, 0.5, na.rm=T)]
       )] 
-
+    
     return(metastats_dt)
   }
 }
@@ -2358,18 +2561,18 @@ compute_metastatistics_util <- function(in_outliers_path, in_no) {
 
 compute_metastatistics_wrapper <- function(in_outliers_output_dt,
                                            in_gaugep_dt) {
-    out_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))[,
-      compute_metastatistics_util(
-        in_outliers_path=out_qs,
-        in_no=grdc_no),
-      by=grdc_no
-    ] %>% 
-      merge(in_gaugep_dt[, list(y_geo=y_geo, grdc_no=as.character(grdc_no))],
-            by='grdc_no', all.y=F)
-    
+  out_dt <- unique(in_outliers_output_dt, by=c('grdc_no'))[,
+                                                           compute_metastatistics_util(
+                                                             in_outliers_path=out_qs,
+                                                             in_no=grdc_no),
+                                                           by=grdc_no
+  ] %>% 
+    merge(in_gaugep_dt[, list(y_geo=y_geo, grdc_no=as.character(grdc_no))],
+          by='grdc_no', all.y=F)
+  
   return(out_dt)
 }
-  
+
 #------ analyze_metastats -----------------------------------------------
 #in_metastats_dt <- tar_read(metastats_dt)
 
@@ -2382,12 +2585,12 @@ analyze_metastats <- function(in_metastats_dt) {
     npr=max(ndays_Que1)>0), by='grdc_no'] %>%
     .[npr==T, unique(grdc_no)]
   
-   # metastats_npr <- in_metastats_dt[, list(npr = fifelse(
-   #  Q50>1, 
-   #  max(ndays_Qu5)>0, 
-   #  max(ndays_Que1)>0)),
-   #  by=grdc_no] %>%
-   #  .[npr==T, unique(grdc_no)]
+  # metastats_npr <- in_metastats_dt[, list(npr = fifelse(
+  #  Q50>1, 
+  #  max(ndays_Qu5)>0, 
+  #  max(ndays_Que1)>0)),
+  #  by=grdc_no] %>%
+  #  .[npr==T, unique(grdc_no)]
   
   metastats_pformat <- melt(
     in_metastats_dt[grdc_no %in% metastats_npr,],
@@ -2401,20 +2604,20 @@ analyze_metastats <- function(in_metastats_dt) {
   
   metastats_nyears <- lapply(seq(0,30, 5), function(max_miss) {
     out_stats <- metastats_pformat[value<=max_miss, 
-                            list(nyears=.N),
-                            by=c('grdc_no', 'max_interp')]
+                                   list(nyears=.N),
+                                   by=c('grdc_no', 'max_interp')]
     out_stats[, max_miss := max_miss]
     return(out_stats)
   }) %>% rbindlist
   
   metastats_ngauges <- lapply(seq(0,30, 5), function(min_nyears) {
     out_stats <- metastats_nyears[nyears>=min_nyears, 
-                           list(ngauges=.N),
-                           by=c('max_miss','max_interp')]
+                                  list(ngauges=.N),
+                                  by=c('max_miss','max_interp')]
     out_stats[, min_nyears := min_nyears]
     return(out_stats)
   }) %>% rbindlist
-
+  
   plot_ngauges <- ggplot(metastats_ngauges, 
                          aes(x=min_nyears, y=max_miss, color=ngauges)) +
     geom_text(aes(label=ngauges)) +
@@ -2450,7 +2653,7 @@ analyze_metastats <- function(in_metastats_dt) {
 compute_noflow_hydrostats_util <- function(in_dt, 
                                            in_lat,
                                            q_thresh = 0.001) {
-
+  
   dt <- copy(in_dt)
   
   #Prepare data for computing statistics -----------------------------------------
@@ -2461,18 +2664,29 @@ compute_noflow_hydrostats_util <- function(in_dt,
     .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period] %>%
     .[!is.na(noflow_period), noflow_periodyr_dur := .N, by = noflow_periodyr]
   
-  #Identify continuous blocks of 5 years
+  #Identify continuous blocks of 5 years (for d80)
   whole_5yrblock <- dt[order(date) & !duplicated(year),] %>%
     .[, year_rleid :=  cumsum(c(1, diff(year) != 1))] %>%
     .[, year_5blockid := ceiling(seq_along(year)/5), by='year_rleid'] %>%
     .[, year_5blockidn := .N, by=c('year_rleid', 'year_5blockid')] %>%
     .[year_5blockidn==5, blockid := 10*year_rleid+year_5blockid]
-  dt <- merge(dt, whole_5yrblock[, .(year, blockid)], by='year', all.x=T)
+  
+  #Compute also partial 5-year blocks if there is no whole 5-year block (for d80)
+  partial_5yrblock <- dt[order(date) & !duplicated(year),]%>%
+    .[, year_5blockid_partial := ceiling(seq_along(year)/5)] %>%
+    .[, year_5blockidn_partial := .N, by=c('year_5blockid_partial')] %>%
+    .[year_5blockidn_partial==5, blockid := year_5blockid_partial]
+  
+  if (whole_5yrblock[!is.na(blockid), .N]>0) {
+    dt <- merge(dt, whole_5yrblock[, .(year, blockid)], by='year', all.x=T)
+  } else {
+    dt <- merge(dt, partial_5yrblock[, .(year, blockid)], by='year', all.x=T)
+  }
   
   #Convert each day i with no flow into an angular (ti) and represent it
   #by a unit vector with rectangular coordinates (cos(ti); sin(ti))
   dt[!is.na(noflow_period), `:=`(cos_t=cos(2*pi*(jday-1)/(diny(year)-1)),
-                                   sin_t=sin(2*pi*(jday-1)/(diny(year)-1))
+                                 sin_t=sin(2*pi*(jday-1)/(diny(year)-1))
   )]
   
   #Identify contiguous six months with the most zero-flow days for computing Sd6
@@ -2621,13 +2835,16 @@ compute_noflow_hydrostats_util <- function(in_dt,
     in_dt[, maxrunoff_date_recessionyr := maxrunoff_date + 365]
     
     runoff_enddates_dt <- lapply(unique(in_dt$maxrunoff_date), function(d) {
+      print(d)
       data.table(
         maxrunoff_date = d,
         runoffevent_enddate = in_dt[date %in% seq(d+1, d + 365, by='day'),
                                     .SD[min(which(runoffQ<=(maxrunoff/2))), date]
         ]
       )
-    }) %>% rbindlist
+    }) %>% 
+      rbindlist %>%
+      .[!is.na(runoffevent_enddate),] #If end of record or missing data the following year.
     
     maxrunoff_events_dt <- merge(in_dt,  runoff_enddates_dt, 
                                  by.x='date', by.y='maxrunoff_date', all.x=F)
@@ -2728,7 +2945,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
                               pref='median') %>%
       setDT %>%
       .[indice=='ml20', 'statistic']]
-
+  
   # medianDr	Median duration of runoff event (*) (day)
   q_stats$medianDr <- compute_baseflow_gustard(dt) %>%
     compute_medianDr
@@ -2745,6 +2962,9 @@ compute_noflow_hydrostats_util <- function(in_dt,
 # max_miss_sel = 0
 # min_nyears = 15
 # q_thresh = 0.001
+
+#1160370 medianDr
+#1196415 medianDr d80
 
 compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
                                               in_metastats_dt,
@@ -2846,6 +3066,9 @@ preformat_hydrostats <- function(in_hydrostats) {
   hydrostats_raw <- in_hydrostats[f0>0, -'grdc_no', with=F] %>%
     .[, I := .I]
   
+  #Assign 0 sD when only one drying event
+  hydrostats_raw[is.na(sD), sD := 0]
+  
   hydrostats_distrib_p <- ggplot(melt(hydrostats_raw), aes(x=value)) +
     geom_density() +
     facet_wrap(~variable, scales='free')
@@ -2853,11 +3076,11 @@ preformat_hydrostats <- function(in_hydrostats) {
   hydrostats_meltattri <- melt(hydrostats_raw, id.vars = 'I') %>%
     merge(hydrostats_order, ., by='variable') 
   
-
+  
   hydrostats_trans <- transform_scale_vars(in_dt=hydrostats_meltattri, 
                                            value_col='value', var_col='variable',
-                                           inplace=FALSE)   
-
+                                           inplace=FALSE)$dt_trans   
+  
   hydrostats_distrib_scaled_p <- ggplot(hydrostats_trans, aes(x=value_scaled)) +
     geom_density() +
     facet_wrap(~variable, scales='free')
@@ -2887,194 +3110,6 @@ preformat_hydrostats <- function(in_hydrostats) {
   )
 }
 
-#------ rundiagnose_clustering ------------------------------------------------
-rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
-                                   dist_name="Euclidean distance"
-) {
-  print(in_method)
-  hclust_res <- hclust(in_dist, method=in_method)
-  
-  #Compute cophenetic correlation --------------------------------------------
-  cophcor <- cor(in_dist, cophenetic(hclust_res))
-  
-  dist_cophcor_dt <- merge(
-    reshape2::melt(as.matrix(in_dist)),
-    reshape2::melt(as.matrix(cophenetic(hclust_res))),
-    by=c('Var1', 'Var2')) %>%
-    setnames(c('value.x', 'value.y'), 
-             c(dist_name, "Cophenetic dissimilarity"))
-  
-  #Plot cophenetic correlation------------------------------------------------
-  p_cophcor <- ggplot(dist_cophcor_dt, 
-                      aes(x=get(dist_name), y=`Cophenetic dissimilarity`)) +
-    geom_point() +
-    geom_smooth(method='lm') +
-    annotate('text', x = 0.5, y=0.1,
-             label=paste('Cophenetic correlation =', 
-                         round(cophcor, 2))) +
-    coord_cartesian(
-      expand=F, 
-      ylim=c(0, max(dist_cophcor_dt$`Cophenetic dissimilarity`)+0.05)) +
-    theme_classic()
-  
-  #Mantel test ---------------------------------------------------------------
-  clust_mantel <- vegan::mantel(
-    xdis = in_dist,
-    ydis = cophenetic(hclust_res),
-    method = "pearson",
-    permutations = 999
-  )
-  
-  #Graph scree plot ----------------------------------------------------------
-  scree_dt <- data.table(height=hclust_res$height,
-                         groups=length(hclust_res$height):1)
-  
-  p_scree <- ggplot(scree_dt,
-                    aes(x=groups, y=height)) +
-    geom_point() +
-    geom_line() + 
-    scale_x_log10(breaks=c(1,5,10,20,50,100,max(scree_dt$groups))) +
-    theme_bw()
-  
-  #Agglomerative coefficient -------------------------------------------------
-  if (in_method !='median') {
-    ag_coef <- coef.hclust(hclust_res)
-  } else {
-    ag_coef <- NA
-  }
-  
-  #NbClust to determine number of clusters -----------------------------------
-  nbclust_tests <- NbClust(data=in_mat, distance='euclidean',
-                           min.nc=min_nc, max.nc=max_nc, method=in_method)
-  
-  return(list(
-    hclust=hclust_res,
-    cophcor = cophcor,
-    p_cophcor = p_cophcor,
-    ag_coef = ag_coef,
-    scree_dt = scree_dt,
-    p_scree = p_scree,
-    clust_mantel = clust_mantel,
-    nbclust_tests = nbclust_tests
-  ))
-}
-
-#------ cuttree_and_visualize --------------------------------------------------
-cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors, 
-                                  in_meltdt, id_col, 
-                                  value_col='value', variable_col='variable',
-                                  aspect_col = 'aspect', classnames= NULL) {
-  
-  #Get dendrogram and class membership
-  dendo_format <-prettydend_classes(in_hclust = in_hclust, 
-                                    in_kclass=in_kclass, 
-                                    in_colors=in_colors,
-                                    classnames= NULL)
-  
-  class_stats <- dendo_format$classes %>%
-    as.data.table %>%
-    .[, classn := .N, by='gclass'] %>%
-    merge(in_meltdt, ., by.x=id_col, by.y='ID') %>%
-    .[, gclass := factor(gclass, levels=sort(unique(gclass)))]
-  
-  #Test classification significance ------------------------------------------
-  mat_dt <- in_mat %>%
-    as.data.table %>%
-    .[, (id_col) := rownames(in_mat)] %>%
-    merge(dendo_format$classes, 
-          by.x=id_col, by.y='ID') 
-  
-  #Check if classes are multivariate normal
-  mshapirotest_classes <- lapply(
-    mat_dt[, .N, by=gclass][N>=20, gclass],
-    function(in_gclass) {
-      #print(in_gclass)
-      subdt <- mat_dt[gclass==in_gclass,]
-      
-      #Replace NA values
-      subdt[, (names(subdt)) := sapply(
-        .SD, function(x) suppressWarnings(zoo::na.aggregate(x)), simplify=F)]
-      
-      mat <- as.matrix(subdt[
-        , -c(id_col, names(subdt)[!subdt[, sapply(.SD, uniqueN)] > 1]),
-        with=F])
-      rownames(mat) <- subdt[, get(id_col)]
-      
-      
-      varcormat <- cor(mat)
-      varcormat[lower.tri(varcormat)] <- NA
-      
-      vartoremove <- reshape2::melt(varcormat) %>%
-        as.data.table %>%
-        .[Var1 != Var2,] %>%
-        .[abs(value) > 0.98, as.character(Var2)]
-      
-      if (length(vartoremove)>1) {
-        sub_mat <- mat[, -which(colnames(mat) %in% vartoremove)]
-      } else {
-        sub_mat <- mat
-      }
-      
-      shapiro_test <- t(sub_mat) %>%
-        mvnormtest::mshapiro.test()
-      
-      return(list(
-        gclass=in_gclass,
-        shapiro_test=shapiro_test)
-      )
-    })
-  
-  #Test significant difference by stat
-  # set up model
-  diff_letters <- lapply(unique(class_stats$variable), function(var) {
-    sub_dat <- class_stats[variable==var,]
-    
-    emmeans(lm(as.formula(paste(value_col, '~ gclass')), 
-               data = sub_dat),
-            specs = as.formula('~ gclass') 
-    ) %>%
-      cld(adjust = "sidak",
-          Letters = letters,
-          alpha = 0.05) %>%
-      as.data.table %>%
-      .[, variable := var]  %>%
-      setnames('.group', 'grp_letter')
-  }) %>% 
-    rbindlist %>%
-    merge(class_stats[!duplicated(paste0(variable, gclass)),
-                      .(variable, aspect, gclass, classn)], 
-          by=c('variable', 'gclass')) 
-  
-  #Get box plot
-  p_cluster_boxplot <- ggplot(
-    class_stats, 
-    aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
-    geom_jitter(size=0.4, alpha=0.5) +
-    geom_boxplot(outlier.shape = NA) +
-    facet_wrap(factor(get(variable_col),
-                      levels=levels(class_stats[[variable_col]]))
-               ~get(aspect_col), 
-               scales='free', ncol=4) +
-    geom_text(data=diff_letters[classn > 1,], 
-              aes(x=gclass, label=grp_letter, y=emmean), 
-              color='black', alpha=0.6) +
-    scale_y_continuous(name='Metric value') +
-    scale_x_discrete(name='Class') +
-    #geom_hline(yintercept=0) +
-    coord_cartesian(clip='off') + 
-    theme_bw() +
-    theme(legend.position = 'none',
-          panel.grid = element_blank())
-  
-  return(list(
-    class_dt = class_stats,
-    p_dendo = dendo_format$plot,
-    p_boxplot = p_cluster_boxplot,
-    class_stats = diff_letters
-  )
-  )
-}
-
 #------ cluster_gauges --------------------------------------------
 #in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 
@@ -3084,7 +3119,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
     !duplicated(variable),
     .(variable, aspect, weight, var_order)]
   hydrostats_mat <- in_hydrostats_preformatted$mat
-
+  
   #Correlation among variables  ------------------------------------------------
   var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
   
@@ -3098,9 +3133,9 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
       palette='RdBu', 
       limits=c(-1, 1), 
       breaks=c(-1, -0.5, 0, 0.5, 1)) +
-    theme(legend.position = c(0.8, 0.3))
+    theme(legend.position.inside = c(0.8, 0.3))
   
-
+  
   #Compute Gower's distance based on correlation coefficients and variable weights
   hydro_dist <- cluster::daisy(
     hydrostats_mat, 
@@ -3114,13 +3149,13 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
   algo_list <- list('average', 'median', 'ward.D', 'ward.D2')
   hclust_reslist <- lapply(
     algo_list, function(in_method) {
-    rundiagnose_clustering(
-      in_mat = hydrostats_mat,
-      in_dist = hydro_dist,
-      in_method = in_method,
-      min_nc = 5,
-      max_nc = 15)
-  })
+      rundiagnose_clustering(
+        in_mat = hydrostats_mat,
+        in_dist = hydro_dist,
+        in_method = in_method,
+        min_nc = 5,
+        max_nc = 15)
+    })
   names(hclust_reslist) <- algo_list
   
   #Define class colors------------------------------------------------------------
@@ -3160,7 +3195,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
 
 export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
                                   out_shp_root) {
- 
+  
   out_shp <- paste0(out_shp_root, in_noflow_clusters$kclass, '.shp')
   gaugep <- terra::vect(dirname(in_path_gaugep), layer=basename(in_path_gaugep))
   cluster_analyses <- in_noflow_clusters$cluster_analyses[[
@@ -3188,7 +3223,7 @@ plot_class_hydrograph_wrapper <- function(in_noflow_clusters,
                                           max_interp_sel,
                                           max_miss_sel,
                                           noflow_qthresh=0.001
-                                          ) {
+) {
   kclass <- in_noflow_clusters$kclass
   #in_noflow_clusters$hclust_reslist_all[[in_noflow_clusters$chosen_hclust]]
   cluster_analyses <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]
@@ -3270,7 +3305,7 @@ plot_class_hydrograph <- function(in_class_dt,
     in_color = in_color,
     noflow_qthresh = noflow_qthresh, 
     smoothing_window = 7
-    )
+  )
   
   return(out_facet)
 }
@@ -3293,7 +3328,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
   if (!('jday' %in% names(in_dt))) {
     in_dt[, jday := format(get(date_col), '%j')]
   }
-
+  
   if (!is.null(lat_col)) {
     in_dt[, cal_doy := ifelse(
       y_geo > 0, 
@@ -3308,7 +3343,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
                                       origin=paste0(year-1, '-01-01')),
                               "%m-%d")]
   }
-
+  
   #Compute statistics on long-term daily flow (average, min, max, Q10, Q25, Q75, Q90) across all stations and years for each class
   padding_ix <- c(rev(seq(365,1)[seq(smoothing_window%/%2)]), 
                   1:365, 
@@ -3325,7 +3360,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
     classmax = max(get(value_col)/yrmean, na.rm=T),
     classmin = min(get(value_col)/yrmean, na.rm=T),
     classsd = sd(get(value_col)/yrmean, na.rm=T)
-    ), by=cal_doy] %>%
+  ), by=cal_doy] %>%
     .[padding_ix,] %>%
     .[, (names(.)[-1]) := sapply(
       .SD, function(x) frollmean(x, n=smoothing_window, na.rm=T, align='center'), 
@@ -3348,10 +3383,10 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
   unit_scale_axis <- function(y) {
     (y - min(y)) / (max(y)-min(y))
   }
-
+  
   #Facetted standardized average yearly hydrograph for each class + Q90-Q10 ribbon
   classhydro_facet <- ggplot(as.data.frame(classflowstats), 
-                            aes(x=as.Date(cal_doy, format="%m-%d"))) + 
+                             aes(x=as.Date(cal_doy, format="%m-%d"))) + 
     #geom_ribbon(aes(ymin=ifelse(classmean-2*classsd>=0,classmean-2*classsd,0), ymax=classmean+2*classsd,
     #                fill=factor(classnames)),alpha=0.3) +
     geom_ribbon(aes(ymin=classQ90, ymax=classQ10), fill=in_color, alpha=0.3) +
@@ -3368,7 +3403,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
         name = 'No-flow probability',
         trans = ~ unit_scale_axis(.),
         breaks = c(0, 0.01, 0.05, 0.1, 0.25, 0.5 , 0.75, 1))
-      ) + 
+    ) + 
     scale_x_date(name=expression(Date~frac(North,South)), date_breaks = "3 month", date_labels='%b',
                  sec.axis = sec_axis(trans = ~ . + 181),
                  expand=c(0,0)) + 
@@ -3430,7 +3465,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
   
   hydrostats_ari[, mean_ari := mean(ari), by=var] %>%
     .[, var := factor(var, levels=.SD[order(mean_ari), unique(var)])]
-
+  
   #---------------- Compute stability against single-gauge removal  ------------
   boot_clust <- fpc::clusterboot(
     data= as.dist(cluster::daisy(
@@ -3462,7 +3497,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
       bootbrd = boot_clust$bootbrd,
       bootrecover = boot_clust$bootrecover
     )]
-
+  
   #clusters with a stability value less than 0.6 should be considered unstable. 
   #Values between 0.6 and 0.75 indicate that the cluster is measuring a pattern 
   #in the data, but there isn’t high certainty about which points should be 
@@ -3471,10 +3506,10 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
   return(list(
     var_imp_ari = hydrostats_ari,
     gboot_clust = out_bootstats
-    ))
+  ))
 }
 
-#------ Analyze environmental correlates ---------------------------------------
+#------ Analyze gauge representativeness ---------------------------------------
 # in_gaugep_dt <- tar_read(gaugep_dt)
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_predvars <- tar_read(predvars)
@@ -3503,8 +3538,8 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   #Analyze relationship between predicted probability of intermittence
   #and classes
   giresprob_class_p <- ggplot(melt(gclass_dt, id.vars=c('gclass','grdc_no'), 
-              measure.vars = c('predprob1', 'predprob30')),
-         aes(x=gclass, y=value, fill=variable)) +
+                                   measure.vars = c('predprob1', 'predprob30')),
+                              aes(x=gclass, y=value, fill=variable)) +
     geom_boxplot() +
     scale_fill_discrete(
       name=str_wrap('Predicted mean annual probability of no-flow', 25),
@@ -3513,7 +3548,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     theme_classic()
   
   #names(gclass_dt)
-
+  
   #Compute density distributions of gauges and entire network of non-perennial rivers
   print('Make distribution plot')
   envhist <- layout_ggenvhist(
@@ -3540,10 +3575,10 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   })
   scaling_parameters_dt <- data.table::rbindlist(net_scaling_parameters) %>%
     .[, col := cols_to_analyze]
-
+  
   #Scale gauges data -----------------------------------------------------------
   gclass_dt_trans <- copy(gclass_dt)
-
+  
   transform_column_wpars <- function(in_dt, in_col, pars) {
     floor_par <- ifelse(pars$min_val <= 0, pars$min_floor - pars$min_val, 0)
     in_dt <- in_dt[, 
@@ -3557,13 +3592,13 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     pars <- scaling_parameters_dt[col == in_col, ]
     transform_column_wpars(in_dt=gclass_dt_trans, in_col, pars)
   })
-
+  
   #Compute overall Wasserstein distance for each variable ----------------------
   print('Compute overall Wasserstein distance for each variable ')
   gires_varmeans <- gires_net_dt[predprob1>=0.5,
                                  lapply(.SD, mean), 
                                  .SDcols = cols_to_analyze]
-
+  
   # calculating standardized bias and Wasserstein distance for each variable
   bias_dt <- gclass_dt_trans %>%
     data.table::melt(measure.vars = cols_to_analyze) %>%
@@ -3604,7 +3639,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     comp_mat=rbind(in_comp_mat, in_ref_mat[1,]),
     ref_mat=as.matrix(gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F])
   )
-
+  
   KLdiv_marginal <- gires_net_dt[
     predprob1>=0.5, 
     get_KLdiv(
@@ -3618,54 +3653,43 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     .[, list(
       HYRIV_ID,
       KLdiv_diff = V1 - KLdiv_current$KLdiv)]
-
-return(list(
-  plot_giresprob_class = giresprob_class_p,
-  plot_envhist = envhist,
-  univar_dist =  univar_dist,
-  KLdiv_marginal = KLdiv_marginal
-))    
+  
+  return(list(
+    plot_giresprob_class = giresprob_class_p,
+    plot_envhist = envhist,
+    univar_dist =  univar_dist,
+    KLdiv_marginal = KLdiv_marginal
+  ))    
 }
 
+#------ Analyze environmental correlates ---------------------------------------
+# in_gaugep_dt <- tar_read(gaugep_dt)
+# in_noflow_clusters <- tar_read(noflow_clusters)
+# in_predvars <- tar_read(predvars)
 
+analyze_environmental_correlates <- function(in_noflow_clusters,
+                                             in_gaugep_dt,
+                                             in_predvars,
+                                             gires_qs_path
+) {
+  #Read and compute derived variables for global river network
+  print('Read network')
+  gires_net_dt <- qread(gires_qs_path) %>%
+    comp_derivedvar
+  
+  #Get gauges class and attributes
+  kclass <- in_noflow_clusters$kclass
+  in_gaugep_dt[, grdc_no := as.character(grdc_no)]
+  
+  gclass_dt <- in_noflow_clusters$cluster_analyses[[
+    paste0('ncl', kclass)]]$class_dt %>%
+    .[!duplicated(grdc_no), .(grdc_no, gclass)] %>%
+    merge(in_gaugep_dt[, -c('UPLAND_SKM', 'LENGTH_KM'), with=F], 
+          by='grdc_no') %>%
+    merge(gires_net_dt, by='HYRIV_ID', all.y=F)
+  
+  #Train a classification tree
+  
+}
 
-
-
-################### EXTRA STUFF ################################################
-# ggplot(q_dt, aes(x=jday, y=Qobs, group=year)) + 
-#   geom_ribbon(aes(ymin=fit_l95, ymax=fit_u95, fill=year), alpha=1/5) + 
-#   #geom_point(aes(color=year), alpha=1/4) +
-#   geom_line(aes(color=year)) +
-#   scale_color_distiller(palette='Spectral') +
-#   scale_fill_distiller(palette='Spectral') +
-#   ggnewscale::new_scale_color() +
-#   geom_point(data=all_flags, aes(color=variable), alpha=1/2) +
-#   scale_y_sqrt() +
-#   theme_classic()
-
-# kr <- KalmanSmooth(q_ts, bestfit$model) #Impute missing values with Kalman Smoother (from https://stats.stackexchange.com/questions/104565/how-to-use-auto-arima-to-impute-missing-values)
-# id.na <- which(is.na(q_ts)) #Limit to gaps < 9 months
-# pred <- q_ts
-# for (i in id.na)
-#   pred[i] <- bestfit$model$Z %*% kr$smooth[i,]
-# q_dt[id.na,'Qinterp'] <- pred[id.na] #Replace NA values in the time series by predicted values
-# #precip1KA41sub[precip1KA41sub$Flow<0.05 & !is.na(precip1KA41sub$Flow),'Flow'] <- 0 #For values < 0 and improbably low values, replace with 0
-# ggplot(q_dt, aes(x=date, y=Qobs)) + geom_point() + #Plot result
-#   geom_point(data=q_dt[id.na,], aes(y=Qinterp), color='red')
-
-
-#Extra fable/forecast functions
-# autoplot(q_ts, log(Qobs+0.1))   #Standard ts plot
-# gg_season(q_ts, log(Qobs+0.1))  #Seasonal plot
-# GGally::ggpairs(as.data.table(q_ts),  #Correlation matrix
-#                 columns=grep('Qobs.*', names(q_ts)))
-# ACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
-# ACF(q_ts, Qobs, lag_max=365*5) %>% autoplot() #correlogram for the past 5 years (trend)
-# PACF(q_ts, Qobs, lag_max=30) %>% autoplot() #correlogram for the past month
-# PACF(q_ts, Qobs, lag_max=365) %>% autoplot() #correlogram for the past month
-
-# check <- tslm(ts(q_ts$Qobs, frequency=365.25) ~ trend + season, lambda='auto') 
-# plot(forecast(check, h=365.25))
-#check<- features(q_ts,Qobs, feature_set(pkgs = "feasts")) #Get all features from feasts
-#check <- tsoutliers(ts(log(q_ts$Qobs+0.01), 365.25)) #look for outliers
 

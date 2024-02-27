@@ -367,6 +367,77 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
   
   return(in_dt)
 }
+#------ transform_scale_vars ---------------------------------------------------
+transform_scale_vars <- function(in_dt, value_col='value', 
+                                 var_col=NULL, inplace=FALSE) {
+  if (!inplace) {
+    dt <- copy(in_dt)
+  } else {
+    dt <- in_dt
+  }
+  
+  dt_trans <- dt %>%
+    .[, stat_min := min(get(value_col), na.rm=T), by=var_col] %>%
+    .[, value_floored := fifelse(stat_min<0, get(value_col)-stat_min, get(value_col)),
+      by=var_col] %>%
+    .[, stat_non0min_floored := .SD[value_floored>0, min(value_floored, na.rm=T)],
+      by=var_col] %>%
+    .[, 
+      value_pos := fifelse(stat_min<=0,
+                           value_floored + stat_non0min_floored/2,
+                           value_floored),
+      by=var_col]
+  
+  #Transform all variables through monotonous trans to approach normal distribution
+  #Get BoxCox lambda values rounded to the nearest 0.5 for simplicity/reproduceability 
+  #(i.e., these values are less likely to change than finer ones)
+  if (!is.null(var_col)) {
+    dt_trans[
+      , bc_lambda := 0.5*round(BoxCox.lambda(value_pos)/0.5), 
+      by=var_col]
+  } else {
+    bc_lambda <- list(0.5*round(BoxCox.lambda(dt_trans$value_pos)/0.5))
+  }
+  
+  dt_trans[, value_trans := BoxCox(value_pos, lambda=bc_lambda[[1]]),
+           by=var_col]
+  
+  if (is.null(var_col)) {
+    trans_mean <- mean(dt_trans$value_trans, na.rm=T)
+    trans_sd <- sd(dt_trans$value_trans, na.rm=T)
+  }
+  
+  #Z-scale stats
+  dt_trans[
+    , value_scaled := scale(value_trans, center=TRUE, scale=TRUE), 
+    by=var_col]
+  
+  if (is.null(var_col) & inplace) {
+    dt_trans[, (value_col) := value_scaled] %>%
+      .[, `:=`(value_scaled=NULL,
+              stat_min=NULL,
+              value_floored=NULL,
+              stat_non0min_floored=NULL,
+              value_pos=NULL,
+              value_trans=NULL),]
+  }
+  
+  return_list <- list()
+  
+  if (!inplace) {
+    return_list$dt_trans <- dt_trans
+  }
+  
+  if (is.null(var_col)) {
+    return_list$trans_mean <- trans_mean
+    return_list$trans_sd <- trans_sd
+    return_list$bc_lambda <- bc_lambda
+  }
+  
+  return(return_list)
+}
+
+
 #------ prettydend_classes ----------------------------------------------------
 #Make a nice looking dendogram based on a clustering output
 prettydend_classes <- function(in_hclust, colorder=NULL, 
@@ -2567,6 +2638,8 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
 
 
 #------ preformat_hydrostats ---------------------------------------------------
+#in_hydrostats <- tar_read(noflow_hydrostats)
+
 preformat_hydrostats <- function(in_hydrostats) {
   #Set statistics order and weight
   hydrostats_order <- data.table(
@@ -2603,39 +2676,14 @@ preformat_hydrostats <- function(in_hydrostats) {
     geom_density() +
     facet_wrap(~variable, scales='free')
   
-  #Make sure that all statistics values are strictly positive through linear transformation
-  #adding half of the smallest non-zero value (could do fancier but should do)
-  hydrostats_trans <- melt(hydrostats_raw, id.vars = 'I') %>%
-    merge(hydrostats_order, ., by='variable') %>%
-    .[, stat_min := min(value, na.rm=T), by=variable] %>%
-    .[, value_floored := fifelse(stat_min<0, value-stat_min, value),
-      by=variable] %>%
-    .[, stat_non0min_floored := .SD[value_floored>0, min(value_floored, na.rm=T)],
-      by=variable] %>%
-    .[, 
-      value_pos := fifelse(stat_min<=0,
-                           value_floored + stat_non0min_floored/2,
-                           value_floored),
-      by=variable] %>%
-    .[order(var_order, I),]
+  hydrostats_meltattri <- melt(hydrostats_raw, id.vars = 'I') %>%
+    merge(hydrostats_order, ., by='variable') 
   
-  hydrostats_distrib_post_p <- ggplot(hydrostats_trans, aes(x=value_pos)) +
-    geom_density() +
-    facet_wrap(~variable, scales='free')
-  
-  #Transform all variables through monotonous trans to approach normal distribution
-  #Get BoxCox lambda values rounded to the nearest 0.5 for simplicity/reproduceability 
-  #(i.e., these values are less likely to change than finer ones)
-  hydrostats_trans[
-    , bc_lambda := 0.5*round(BoxCox.lambda(value_pos)/0.5), 
-    by=variable] %>%
-    .[, value_trans := BoxCox(value_pos, lambda=bc_lambda[[1]]), by=variable]
-  
-  #Z-scale stats
-  hydrostats_trans[
-    , value_scaled := scale(value_trans, center=TRUE, scale=TRUE), 
-    by=variable]
-  
+
+  hydrostats_trans <- transform_scale_vars(in_dt=hydrostats_meltattri, 
+                                           value_col='value', var_col='variable',
+                                           inplace=FALSE)   
+
   hydrostats_distrib_scaled_p <- ggplot(hydrostats_trans, aes(x=value_scaled)) +
     geom_density() +
     facet_wrap(~variable, scales='free')
@@ -3253,9 +3301,9 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
 }
 
 #------ Analyze environmental correlates ---------------------------------------
-in_gaugep_dt <- tar_read(gaugep_dt)
-in_noflow_clusters <- tar_read(noflow_clusters)
-in_predvars <- tar_read(predvars)
+# in_gaugep_dt <- tar_read(gaugep_dt)
+# in_noflow_clusters <- tar_read(noflow_clusters)
+# in_predvars <- tar_read(predvars)
 
 
 analyze_env_correlates <- function(in_noflow_clusters,
@@ -3276,7 +3324,7 @@ analyze_env_correlates <- function(in_noflow_clusters,
     .[!duplicated(grdc_no), .(grdc_no, gclass)] %>%
     merge(in_gaugep_dt[, -c('UPLAND_SKM', 'LENGTH_KM'), with=F], 
           by='grdc_no') %>%
-    merge(gires_net_dt, by='HYRIV_ID', all.y=F) 
+    merge(gires_net_dt, by='HYRIV_ID', all.y=F)
   
   #Analyze relationship between predicted probability of intermittence
   #and classes
@@ -3290,27 +3338,60 @@ analyze_env_correlates <- function(in_noflow_clusters,
     ) +
     theme_classic()
   
+  names(gclass_dt)
+  
   #Compute density distributions of gauges and entire network of non-perennial rivers
   envhist <- layout_ggenvhist(
     in_rivernetwork = gires_net_dt[predprob1>=0.5,],
     in_gaugepred = gclass_dt ,
     in_predvars = in_predvars)
   
+  #Scale data for computing Wasserstein distance
+  gclass_dt_trans <- copy(gclass_dt)
+  
+  cols_to_scale <-names(gires_net_dt[
+    , -c('HYRIV_ID', 'LENGTH_KM', 'predprob1', 'predprob30'), with=F])
+  
+  
+  #Scale network
+  net_scaling_parameters <- lapply(cols_to_scale, function(in_col) {
+    print(in_col)
+    profvis::profvis({
+      transform_scale_vars(in_dt=gires_net_dt,
+                           value_col=in_col,
+                           var_col=NULL, 
+                           inplace=T)
+    })
+  })
+  
+  #Scale gauges ########CONTINUE HERE. USE THE SAME SCALING PARAMETERS
+  g_scaling_parameters <- lapply(cols_to_scale, function(in_col) {
+    print(in_col)
+    transform_scale_vars(in_dt=gclass_dt_trans,
+                         value_col=in_col,
+                         var_col=NULL, 
+                         inplace=T)
+  })
+
+  
+
+  
+  wass <- waddR::wasserstein_metric(x=gires_net_dt[predprob1>=0.5, get(in_var)],
+                                    y=gclass_dt[, get(in_var)],
+                                    p=2)
+  
   #Calculating standardized bias and Wasserstein distance for each variable
-  all_bias<-matrix(, nrow = dim(gagdata[,-1])[2], ncol = 3)
-  rownames(all_bias)<-t(VARnames)
-  all_bias<-cbind(VARnames,all_bias)
-  all_bias[,2]<-bias(gagdata[,-1],varmeans,type='standardized')
-  colnames(all_bias)<-c("Variable", "bias", "wasser","Direction")
+  # all_bias<-matrix(, nrow = dim(gagdata[,-1])[2], ncol = 3)
+  # rownames(all_bias)<-t(VARnames)
+  # all_bias<-cbind(VARnames,all_bias)
+  # all_bias[,2]<-bias(gagdata[,-1],varmeans,type='standardized')
+  # colnames(all_bias)<-c("Variable", "bias", "wasser","Direction")
   
 return(list(
   plot_giresprob_class = giresprob_class_p,
   plot_envhist
 ))    
 }
-
-
-#------ Link gauges to GIRES network -------------------------------------------
 
 
 

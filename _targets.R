@@ -10,9 +10,9 @@ if (!dir.exists(temp_qs_dir)) {
 }
 
 nthreads <- round(parallel::detectCores()*0.75)
-plan(multisession, workers=nthreads)
-tar_option_set(format = "qs",
-               controller= crew_controller_local(workers = nthreads))
+#plan(multisession, workers=nthreads)
+tar_option_set(format = "qs")
+#, controller= crew_controller_local(workers = nthreads))
 
 
 #------ There is an issue with large fread in the pipeline so need to run this---

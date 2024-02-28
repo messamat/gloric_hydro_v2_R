@@ -1181,10 +1181,8 @@ formatscales <- function(in_df, varstoplot) {
     cly_pc_uav = scale_x_continuous(labels=scales::percent_format(scale=1),
                                     expand=c(0,0)),
     cmi_ix_uyr = scale_x_continuous(),
-    dis_m3_pyr = scale_x_log10(breaks=c(1, 10^2,
-                                        10^(0:log10(max(in_df$dis_m3_pyr)))),
-                               labels=c(0, 10^2,
-                                        10^(0:log10(max(in_df$dis_m3_pyr)))),
+    dis_m3_pyr = scale_x_log10(breaks=c(0.1, 1, 10, 100, 1000),
+                               labels=c(0.1, 1, 10, 100, 1000),
                                expand=c(0,0)),
     dor_pc_pva = scale_x_continuous(labels=scales::percent_format(scale=1),
                                     expand=c(0,0)),
@@ -2717,7 +2715,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
       .[ 92:(.N-91), ]
     
     #Find the Julian day with the most number of no-flow days on interannual average
-    driest_6mocenter <- in_dt[
+    driest_6mocenter <- in_dt[get(jday_col) < 366 #can lead to artefacts if drying was infrequent but occurred during that time
       , as.Date(
         unique(get(jday_col))[
           which.max(.SD[, mean(noflow_6morollsum, na.rm=T),by=jday_col]$V1)],
@@ -2971,9 +2969,6 @@ compute_noflow_hydrostats_util <- function(in_dt,
 # min_nyears = 15
 # q_thresh = 0.001
 
-#1160370 medianDr
-#1196415 medianDr d80
-
 compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
                                               in_metastats_dt,
                                               in_gaugep_dt,
@@ -3077,6 +3072,10 @@ preformat_hydrostats <- function(in_hydrostats) {
   #Assign 0 sD when only one drying event
   hydrostats_raw[is.na(sD), sD := 0]
   
+  #
+  hydrostats_raw <- hydrostats_raw[!(grdc_no %in% c('2496700')),]
+  
+  #Check distribution and melt
   hydrostats_distrib_p <- ggplot(melt(hydrostats_raw), aes(x=value)) +
     geom_density() +
     facet_wrap(~variable, scales='free')
@@ -3573,8 +3572,9 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     .[. %in% names(gires_net_dt)]
   
   #Scale network data ----------------------------------------------------------
+  print('Scale variables')
   net_scaling_parameters <- lapply(cols_to_analyze, function(in_col) {
-    print(in_col)
+    #print(in_col)
     transform_scale_vars(in_dt=gires_net_dt,
                          value_col=in_col,
                          var_col=NULL, 
@@ -3648,8 +3648,9 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     ref_mat=as.matrix(gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F])
   )
   
+  start=Sys.time()
   KLdiv_marginal <- gires_net_dt[
-    predprob1>=0.5, 
+    predprob1>=0.5,
     get_KLdiv(
       comp_mat = rbind(
         in_comp_mat,
@@ -3661,11 +3662,13 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     .[, list(
       HYRIV_ID,
       KLdiv_diff = V1 - KLdiv_current$KLdiv)]
+  print(Sys.time()-start)
   
   return(list(
     plot_giresprob_class = giresprob_class_p,
     plot_envhist = envhist,
     univar_dist =  univar_dist,
+    KLdiv_current = KLdiv_current,
     KLdiv_marginal = KLdiv_marginal
   ))    
 }
@@ -3696,8 +3699,21 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
           by='grdc_no') %>%
     merge(gires_net_dt, by='HYRIV_ID', all.y=F)
   
+  #
+  gclass_dt[, gclass_n := .N, by=gclass][
+    , gclass_weight := max(gclass_n)/gclass_n ]
+
   #Train a classification tree
+  tree_formula <- as.formula(paste0("gclass~",
+                    paste(names(gclass_dt)[26:ncol(gclass_dt)], collapse='+')))
   
+  rpart_mod1 <- rpart(formula=tree_formula, data=gclass_dt,
+                      weights = gclass_dt$gclass_weight,
+                      control = rpart.control(cp = 0.01))
+  
+  plot(rpart_mod1)
+  text(rpart_mod1, use.n = TRUE)
+    
 }
 
 

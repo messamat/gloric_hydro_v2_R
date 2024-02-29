@@ -4,15 +4,20 @@ source("R/gloric_functions.R")
 rootdir = rprojroot::find_root(has_dir('src'))
 datdir = file.path(rootdir, 'data')
 resdir = file.path(rootdir, 'results')
+figdir = file.path(resdir, 'figures')
+if (!dir.exists(figdir)) {
+  dir.create(figdir)
+}
+
 temp_qs_dir = file.path(resdir, 'temp_qs')
 if (!dir.exists(temp_qs_dir)) {
   dir.create(temp_qs_dir)
 }
 
 nthreads <- round(parallel::detectCores()*0.75)
-#plan(multisession, workers=nthreads)
-tar_option_set(format = "qs")
-#, controller= crew_controller_local(workers = nthreads))
+plan(multisession, workers=nthreads)
+tar_option_set(format = "qs",
+               controller= crew_controller_local(workers = nthreads))
 
 
 #------ There is an issue with large fread in the pipeline so need to run this---
@@ -29,6 +34,8 @@ if (!file.exists(gires_qs_path)) {
 #--- Parameters ---------------------------------------------------------------
 min_yrs = 20
 overwrite=F
+class_colors <- c("#E69F00", "#DECF03", "#A20101","#0072B2", 
+                  "#A8BF7A", "#686868", "#CC79A7", "#03C18E")
 
 ############################# Define targets plan ##############################
 list(
@@ -56,7 +63,7 @@ list(
   tar_target(path_gauges_rivicetiles_join, file.path(resdir, 'grdc_p_o20y_clean_landsatjoin.csv'))
   ,  
   
-  
+
   #------------------------------ Read files -----------------------------------
   tar_target(GRDC_metadata,
              read_xlsx(path_GRDC_metadata, sheet = 'station_catalogue') %>%
@@ -291,14 +298,16 @@ list(
   tar_target(
     noflow_clusters,
     cluster_noflow_gauges_full(in_hydrostats_preformatted=
-                                 noflow_hydrostats_preformatted)
+                                 noflow_hydrostats_preformatted, 
+                               in_colors=class_colors)
   ),
+  
   
   tar_target(
     out_gaugesp_path,
     export_gauges_classes(in_noflow_clusters=noflow_clusters,
                           in_path_gaugep =path_gaugep,
-                          out_shp_root=file.path(resdir, 'gaugep_classstats_avg')
+                          out_shp_root=file.path(resdir, 'gaugep_classstats_ward')
     )
   ),
   
@@ -319,14 +328,57 @@ list(
       in_hydrostats_preformatted = noflow_hydrostats_preformatted)
   ),
   
+  # tar_target(
+  #   gauge_representativeness,
+  #   analyze_gauge_representativeness(in_noflow_clusters=noflow_clusters,
+  #                                    in_gaugep_dt=gaugep_dt,
+  #                                    in_predvars=predvars,
+  #                                    gires_qs_path=gires_qs_path
+  #   )
+  # ),
+  
   tar_target(
-    gauge_representativeness,
-    analyze_gauge_representativeness(in_noflow_clusters=noflow_clusters,
-                                     in_gaugep_dt=gaugep_dt,
-                                     in_predvars=predvars,
-                                     gires_qs_path=gires_qs_path
-    )
+    export_plots,
+    {
+      
+      pname_suffix <- paste0(gsub('[.]','_', noflow_clusters$chosen_hclust), '_',
+                             format(Sys.Date(), '%Y%m%d'), '.pdf')
+      
+      ggsave(file.path(figdir, paste0('p_scree_', pname_suffix)),
+             noflow_clusters$hclust_reslist_all[[noflow_clusters$chosen_hclust]]$p_scree
+             )
+      
+      ggsave(file.path(figdir, paste0('p_dendo_', pname_suffix)),
+             noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_dendo,
+             width = 25, height = 10, units = "cm")
+      
+      ggsave(file.path(figdir, paste0('p_boxplot_', pname_suffix)),
+             noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
+             width = 30, height = 30, units = "cm")
+      
+      ggsave(file.path(figdir, paste0('p_hydrographs_',  pname_suffix)),
+             unit_hydrographs,
+             width = 20, height = 20, units = "cm")
+    }
+  ),
+  
+  tar_target(
+    export_tables,
+    {
+      stats_table <- noflow_clusters$cluster_analyses[[
+        paste0('ncl',  noflow_clusters$kclass)]]$class_stats %>%
+        digitform(cols=c('emmean', 'lower.CL', 'upper.CL'),
+                  extradigit = 2, inplace=F) %>%
+        .[, stat_format := paste0(emmean, ' (', lower.CL, '-', upper.CL, ')')] %>%
+        dcast(gclass+classn~variable, value.var = 'stat_format')
+      
+      fwrite(stats_table,
+             file.path(figdir,paste0('hydrostats_',
+                                     format(Sys.Date(), '%Y%m%d'), '.csv')
+             ))
+    }
   )
+
 )
 
 

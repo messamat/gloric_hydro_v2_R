@@ -76,6 +76,27 @@ diny <- function(year) {
   365 + (year %% 4 == 0) - (year %% 100 == 0) + (year %% 400 == 0)
 }
 
+#------ digitform --------------------------------
+#Get the number of significant digits based on the log10 of the median of each metric, if number >=10, no sig digit
+digitform <- function(df, cols, extradigit=0, inplace=F) {
+  if (!inplace) {
+    df <- copy(df)
+  }
+  df[, (cols) := sapply(.SD, function(x) {
+    as.character(round(x,
+                       digits=ifelse(
+                         median(as.numeric(x),na.rm=T)==0,
+                         0,
+                         ifelse(floor(log10(abs(median(as.numeric(x), na.rm=T))))>0,
+                                0,abs(floor(log10(abs(median(as.numeric(x), na.rm=T)))))))
+                       +extradigit)) 
+    
+  }, simplify=F),
+  .SDcols=cols]
+  
+  return(df)
+}
+
 #------ zero_lomf -----------------
 #' Last \[non-zero\] Observation Moved Forward (lomf)
 #'
@@ -719,30 +740,38 @@ cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors,
       setnames('.group', 'grp_letter')
   }) %>% 
     rbindlist %>%
+    .[, grp_letter := str_trim(grp_letter)] %>%
     merge(class_stats[!duplicated(paste0(variable, gclass)),
                       .(variable, aspect, gclass, classn)], 
           by=c('variable', 'gclass')) 
   
+  class_stats[, facet_labels := paste0()]
+  
   #Get box plot
   p_cluster_boxplot <- ggplot(
     class_stats, 
-    aes(x=factor(gclass), y=get(value_col), color=factor(gclass))) +
+    aes(x=gclass, y=get(value_col), color=factor(gclass))) +
     geom_jitter(size=0.4, alpha=0.5) +
     geom_boxplot(outlier.shape = NA) +
+    geom_text(data=diff_letters, 
+              aes(x=gclass, label=grp_letter, y=emmean), 
+              color='black', size=3, alpha=0.5) +
+    scale_y_continuous(name='Metric value') +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') + 
     facet_wrap(factor(get(variable_col),
                       levels=levels(class_stats[[variable_col]]))
                ~get(aspect_col), 
                scales='free', ncol=4) +
-    geom_text(data=diff_letters[classn > 1,], 
-              aes(x=gclass, label=grp_letter, y=emmean), 
-              color='black', alpha=0.6) +
-    scale_y_continuous(name='Metric value') +
-    scale_x_discrete(name='Class') +
-    #geom_hline(yintercept=0) +
-    coord_cartesian(clip='off') + 
     theme_bw() +
     theme(legend.position = 'none',
-          panel.grid = element_blank())
+          axis.line = element_line(color='darkgrey'),
+          panel.grid = element_blank(),
+          panel.border = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(margin = margin(0,0,0.1,0, "cm")))
   
   return(list(
     class_dt = class_stats,
@@ -2500,7 +2529,6 @@ na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
   in_dt[, NAperiod := rleid(is.na(get(in_var)))] %>%
     .[is.na(get(in_var)), NAperiod_n := .N, by=NAperiod]
   in_dt[, NAperiod := NULL]
-  
 }
 
 
@@ -2520,7 +2548,7 @@ na_interp_dt_custom <- function(in_dt, in_var, in_freq=365.25, in_floor=0) {
 # in_floor=0
 
 compute_metastatistics_util <- function(in_outliers_path, in_no) {
-  print(in_no)
+  #print(in_no)
   in_dt_edit_path <- paste0(
     tools::file_path_sans_ext(in_outliers_path),
     '_edit.csv')
@@ -2665,10 +2693,10 @@ compute_noflow_hydrostats_util <- function(in_dt,
   #Prepare data for computing statistics -----------------------------------------
   #Uniquely identify no-flow period
   dt[, noflow_period := rleid(Qobs_interp <= q_thresh)] %>%
-    .[, noflow_periodyr := rleid(Qobs_interp <= q_thresh), by='year'] %>%
+    .[, noflow_periodyr := rleid(Qobs_interp <= q_thresh), by=year] %>%
     .[Qobs_interp > q_thresh, noflow_period := NA] %>%
     .[!is.na(noflow_period), noflow_period_dur := .N, by = noflow_period] %>%
-    .[!is.na(noflow_period), noflow_periodyr_dur := .N, by = noflow_periodyr]
+    .[!is.na(noflow_period), noflow_periodyr_dur := .N, by = .(noflow_periodyr, year)]
   
   #Identify continuous blocks of 5 years (for d80)
   whole_5yrblock <- dt[order(date) & !duplicated(year),] %>%
@@ -2841,7 +2869,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
     in_dt[, maxrunoff_date_recessionyr := maxrunoff_date + 365]
     
     runoff_enddates_dt <- lapply(unique(in_dt$maxrunoff_date), function(d) {
-      print(d)
+      #print(d)
       data.table(
         maxrunoff_date = d,
         runoffevent_enddate = in_dt[date %in% seq(d+1, d + 365, by='day'),
@@ -2988,7 +3016,7 @@ compute_noflow_hydrostats_wrapper <- function(in_metastats_analyzed,
   
   
   qstats_dt <- future_lapply(gauges_sel_no, function(in_no) {
-    print(in_no)
+    #print(in_no)
     #For given gauge, get years with less than the maximum number of missing days
     #given maximum interpolation period
     meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
@@ -3071,10 +3099,7 @@ preformat_hydrostats <- function(in_hydrostats) {
   
   #Assign 0 sD when only one drying event
   hydrostats_raw[is.na(sD), sD := 0]
-  
-  #
-  hydrostats_raw <- hydrostats_raw[!(grdc_no %in% c('2496700')),]
-  
+
   #Check distribution and melt
   hydrostats_distrib_p <- ggplot(melt(hydrostats_raw), aes(x=value)) +
     geom_density() +
@@ -3118,9 +3143,12 @@ preformat_hydrostats <- function(in_hydrostats) {
 }
 
 #------ cluster_gauges --------------------------------------------
-#in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
+# in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
+# in_colors = class_colors
 
-cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
+
+cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
+                                       in_colors) {
   hydrostats_dt <- in_hydrostats_preformatted$dt
   hydrostats_order <- in_hydrostats_preformatted$dt[
     !duplicated(variable),
@@ -3165,33 +3193,62 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted) {
     })
   names(hclust_reslist) <- algo_list
   
+  # hclust_reslist$average$cophcor
+  # hclust_reslist$average$p_scree
+  # hclust_reslist$average$nbclust_tests$Best.nc
+  # hclust_reslist$median$cophcor
+  # hclust_reslist$ward.D$cophcor
+  # hclust_reslist$ward.D2$cophcor
+  # hclust_reslist$ward.D2$p_scree
+  # hclust_reslist$ward.D2$nbclust_tests$Best.nc
+  
   #Define class colors------------------------------------------------------------
   #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
-  classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
-                '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3', '#e41a1c',
-                '#4daf4a','#ff7f00')
+  # classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
+  #               '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3', '#e41a1c',
+  #               '#4daf4a','#ff7f00')
   #classcol_temporal <- c(,'#377eb8',,'#666666','#a65628')
   
   
   #Make table of gauge classes and good looking dendogram-----------------------
-  nclass_list <- c(5, 9)
+  nclass_list <- c(6, 9)
   cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
       in_mat = hydrostats_mat,
       in_hclust = hclust_reslist$average$hclust,
       in_kclass = kclass,
-      in_colors = classcol, 
+      in_colors = in_colors, 
       in_meltdt = hydrostats_dt,
       id_col = 'grdc_no')
   })
   names(cluster_analyses_avg) <- paste0('ncl', nclass_list)
   
+  nclass_list <- c(6, 8)
+  cluster_analyses_ward2 <- lapply(nclass_list, function(kclass) {
+    cuttree_and_visualize(
+      in_mat = hydrostats_mat,
+      in_hclust = hclust_reslist$ward.D2$hclust,
+      in_kclass = kclass,
+      in_colors = in_colors, 
+      in_meltdt = hydrostats_dt,
+      id_col = 'grdc_no')
+  })
+  names(cluster_analyses_ward2) <- paste0('ncl', nclass_list)
+  
+  # cluster_analyses_avg$ncl6$class_dt[, classn[[1]], by=gclass]
+  # cluster_analyses_avg$ncl6$p_boxplot
+  
+  # cluster_analyses_ward2$ncl6$class_dt[, classn[[1]], by=gclass]
+  # cluster_analyses_ward2$ncl6$p_boxplot
+  # cluster_analyses_ward2$ncl8$class_dt[, classn[[1]], by=gclass]
+  # cluster_analyses_ward2$ncl8$p_boxplot
+  
   return(list(
     hclust_reslist_all = hclust_reslist,
-    cluster_analyses = cluster_analyses_avg,
+    cluster_analyses = cluster_analyses_ward2,
     hydro_dist = hydro_dist,
-    chosen_hclust = 'average',
-    kclass = 9
+    chosen_hclust = 'ward.D2',
+    kclass = 8
   ))
 }
 
@@ -3393,7 +3450,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
   
   #Facetted standardized average yearly hydrograph for each class + Q90-Q10 ribbon
   classhydro_facet <- ggplot(as.data.frame(classflowstats), 
-                             aes(x=as.Date(cal_doy, format="%m-%d"))) + 
+                             aes(x=as.Date(cal_doy, format="%m-%d")+181)) + 
     #geom_ribbon(aes(ymin=ifelse(classmean-2*classsd>=0,classmean-2*classsd,0), ymax=classmean+2*classsd,
     #                fill=factor(classnames)),alpha=0.3) +
     geom_ribbon(aes(ymin=classQ90, ymax=classQ10), fill=in_color, alpha=0.3) +
@@ -3411,8 +3468,9 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
         trans = ~ unit_scale_axis(.),
         breaks = c(0, 0.01, 0.05, 0.1, 0.25, 0.5 , 0.75, 1))
     ) + 
-    scale_x_date(name=expression(Date~frac(North,South)), date_breaks = "3 month", date_labels='%b',
-                 sec.axis = sec_axis(trans = ~ . + 181),
+    scale_x_date(name=expression(Date~frac(South, North)), 
+                 date_breaks = "3 month", date_labels='%b',
+                 sec.axis = sec_axis(trans = ~ . - 181),
                  expand=c(0,0)) + 
     theme_classic() +
     theme(strip.background = element_blank(),
@@ -3705,14 +3763,18 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
 
   #Train a classification tree
   tree_formula <- as.formula(paste0("gclass~",
-                    paste(names(gclass_dt)[26:ncol(gclass_dt)], collapse='+')))
+                    paste(names(gclass_dt)[names(gclass_dt) %in% in_predvars$varcode],
+                          collapse='+')))
   
   rpart_mod1 <- rpart(formula=tree_formula, data=gclass_dt,
                       weights = gclass_dt$gclass_weight,
-                      control = rpart.control(cp = 0.01))
+                      control = rpart.control(cp = 0.01)
+                    )
   
   plot(rpart_mod1)
   text(rpart_mod1, use.n = TRUE)
+  
+  labels(rpart_mod1)
     
 }
 

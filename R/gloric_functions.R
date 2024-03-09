@@ -802,6 +802,8 @@ selectformat_predvars <- function(inp_riveratlas_meta, in_gaugestats) {
   predcols<- c(
     #monthlydischarge_preds,
     'UPLAND_SKM',
+    'slo_dg_cav',
+    'slo_dg_uav',
     'dis_m3_pyr',
     'dis_m3_pmn',
     'dis_m3_pmx',
@@ -2048,7 +2050,6 @@ prepare_QC_data_util <- function(in_grdc_no,
           by=c('grdc_no', 'date'),
           all.x=T
     )
-  #F##################################################### FIX TO AVOID DUPLICATES ##################################################
   # merge(in_rivice[order(-river_ice_fraction) & !duplicated(date),
   #                 -'mean_elv',with=F],
   #       by=c('grdc_no', 'date'),
@@ -2355,7 +2356,7 @@ detect_outliers_ts <- function(in_data, in_nearg_cols, run_arima = T,
     #Join ARIMA to dt 
     in_data <- merge(in_data, qARIMA$fit_dt, by='date', all.x=T)
     
-    #Find differences from forecast outside of the julian day 90% interval
+    #Find differences from forecast outside of the julian day 95% interval
     obsfitdiff_roll_dt <- lapply(seq(366), function(i) {
       dt_processed <- in_data[
         jday==i, 
@@ -2907,8 +2908,9 @@ compute_noflow_hydrostats_util <- function(in_dt,
       .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
     medianD = median(
       .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
-    sD = sd(
+    sdD = sd(
       .SD[!is.na(noflow_period) & !duplicated(noflow_period), noflow_period_dur]),
+    
     #d80 is computed, excluding all years not within continuous blocks of 5 years 
     #in chronological order (i.e., no re-ordering within continuous periods of 
     #record to minimize or maximize d80)
@@ -2926,8 +2928,9 @@ compute_noflow_hydrostats_util <- function(in_dt,
       .SD[, uniqueN(noflow_period, na.rm=T), by=year]$V1),
     
     #Timing
-    theta = atan2(mean(cos_t, na.rm=T), 
-                  mean(sin_t, na.rm=T)),
+    theta = atan2(mean(sin_t, na.rm=T),
+                  mean(cos_t, na.rm=T) 
+                  ),
     r = sqrt(mean(cos_t, na.rm=T)^2 
              + mean(sin_t, na.rm=T)^2),
     
@@ -2936,50 +2939,46 @@ compute_noflow_hydrostats_util <- function(in_dt,
             (quantile(Qobs_interp, 0.99)- quantile(Qobs_interp, 0.01))),
     
     #Proportion of zero-flow days with max monthly temperature under 0
-    sub0C_per = .SD[tmax<0, sum(Qobs_interp <= q_thresh)]/
+    Fper = .SD[tmax<0, sum(Qobs_interp <= q_thresh)]/
       sum(Qobs_interp <= q_thresh),
     
-    subm10C_per = .SD[tmax<(-10), sum(Qobs_interp <= q_thresh)]/
+    FperM10 = .SD[tmax<(-10), sum(Qobs_interp <= q_thresh)]/
       sum(Qobs_interp <= q_thresh),
     
     #50th and 90th quantile of PDSI during no-flow
-    pdsi_50q = .SD[!is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)],
+    pdsi_medratio = .SD[is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)]
+    -.SD[!is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)],
     
-    pdsi_90q = .SD[!is.na(noflow_period), quantile(PDSI, 0.9, na.rm=T)]
-    
+    P90PDSI = .SD[!is.na(noflow_period), quantile(PDSI, 0.9, na.rm=T)]
   )]
   
   #Adjust theta for stations in southern hemisphere. To avoid discontinuities, 
   #shift the seasons progressively up to 23.5 degrees. 
   #After 23.5, shift by a full half year 
   #i.e. Meteorological summer starts December 1st instead of June 1st
-  q_stats[, theta := fifelse(in_lat >= 0,
-                             theta,
-                             (theta - pi*max(-1, (in_lat/23.5)))%%(2*pi)
-  )]
-  
+  q_stats[, theta := fifelse(theta < 0,
+                             theta + 2*pi,
+                             theta)] %>%
+    .[, theta :=  fifelse(in_lat >= 0,
+                          theta,
+                          (theta - pi*max(-1, (in_lat/23.5)))%%(2*pi)
+    )]
+
   #Compute seasonal predictability of no-flow events (Sd6)
   q_stats$Sd6 <- dt[, ym := format(date, '%Y%m')] %>%
     .[, any(!is.na(noflow_period)), by=.(year, ym, dry_6mo)] %>%
     .[, sum(V1, na.rm=T), by=.(year, dry_6mo)] %>% #Compute number of months with zero-flows for each wet and dry period and year
     .[, 1-(.SD[!dry_6mo,mean(V1)]/.SD[dry_6mo,mean(V1)])]
   
-  
   # Rate of change	Drec	Seasonal recession time scale (Catalogne, 2012) (day)
   q_stats[, Drec := nrow(sea_rec)]
-  
   
   # BFI	Baseflow index computed with the smoothed minima method introduced by the 
   #Institute of Hydrology (1980) (dimensionless)
   #See "Gustard, A., & Demuth, S. (2008). Manual on low-flow estimation and 
   #prediction. Operational Hydrology Report No. 50 (World Meteorological Organization (WMO), Ed.). Opera."s
-  q_stats$bfi <-  dt[
-    , EflowStats::calc_magLow(x=.SD[, .(as.Date(date), Qobs_interp)],
-                              yearType='calendar',
-                              pref='median') %>%
-      setDT %>%
-      .[indice=='ml20', 'statistic']]
-  
+  q_stats$bfi <- compute_baseflow_gustard(dt)[, mean(bfQ/Qobs_interp, na.rm=T)]  
+    
   # medianDr	Median duration of runoff event (*) (day)
   q_stats$medianDr <- compute_baseflow_gustard(dt) %>%
     compute_medianDr
@@ -3070,9 +3069,9 @@ preformat_hydrostats <- function(in_hydrostats) {
   hydrostats_order <- data.table(
     variable = c("f0", 
                  "meanN", "medianN","sdN",   
-                 "meanD", "medianD", "sD", "d80",
+                 "meanD", "medianD", "sdD", "d80",
                  "Drec", "Ic", "bfi", "medianDr",
-                 "sub0C_per","subm10C_per", "pdsi_50q", "pdsi_90q",
+                 "Fper","FperM10", "pdsi_medratio", "P90PDSI",
                  "theta", "r", "Sd6"),
     aspect = c('Intermittence',
                rep('Frequency', 3),
@@ -3125,9 +3124,9 @@ preformat_hydrostats <- function(in_hydrostats) {
   
   #Impute PDSIq50 and q90 with a median
   hydrostats_scaled_cast[
-    is.na(pdsi_50q),
-    `:=`(pdsi_50q = median(hydrostats_scaled_cast$pdsi_50q, na.rm=T),
-         pdsi_90q = median(hydrostats_scaled_cast$pdsi_90q, na.rm=T)
+    is.na(pdsi_medratio),
+    `:=`(pdsi_medratio = median(hydrostats_scaled_cast$pdsi_medratio, na.rm=T),
+         P90PDSI = median(hydrostats_scaled_cast$P90PDSI, na.rm=T)
     )]
   
   hydrostats_mat <- as.matrix(hydrostats_scaled_cast[,-c('I'), with=F])
@@ -3148,12 +3147,14 @@ preformat_hydrostats <- function(in_hydrostats) {
 
 
 cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
-                                       in_colors) {
+                                       stats_sel, in_colors) {
   hydrostats_dt <- in_hydrostats_preformatted$dt
   hydrostats_order <- in_hydrostats_preformatted$dt[
     !duplicated(variable),
     .(variable, aspect, weight, var_order)]
-  hydrostats_mat <- in_hydrostats_preformatted$mat
+  
+  hydrostats_mat_sub <- in_hydrostats_preformatted$mat %>%
+    .[, which(colnames(.) %in% stats_sel)]
   
   #Correlation among variables  ------------------------------------------------
   var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
@@ -3171,7 +3172,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
     theme(legend.position.inside = c(0.8, 0.3))
   
   
-  #Compute Gower's distance based on correlation coefficients and variable weights
+  #Compute  Euclidean distance based on correlation coefficients and variable weights
   hydro_dist <- cluster::daisy(
     hydrostats_mat, 
     metric = "euclidean") %>%
@@ -3181,7 +3182,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   
   #
   #Cluster departments based on UPGMA or Ward's---------------------------------
-  algo_list <- list('average', 'median', 'ward.D', 'ward.D2')
+  algo_list <- list('average', 'median', 'ward.D2')
   hclust_reslist <- lapply(
     algo_list, function(in_method) {
       rundiagnose_clustering(
@@ -3243,12 +3244,14 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   # cluster_analyses_ward2$ncl8$class_dt[, classn[[1]], by=gclass]
   # cluster_analyses_ward2$ncl8$p_boxplot
   
+  #Return objects --------------------------------------------------------------
   return(list(
     hclust_reslist_all = hclust_reslist,
     cluster_analyses = cluster_analyses_ward2,
     hydro_dist = hydro_dist,
     chosen_hclust = 'ward.D2',
-    kclass = 8
+    kclass = 8,
+    p_varscor = p_varscor
   ))
 }
 
@@ -3541,7 +3544,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
     clustermethod = disthclustCBI,
     k=kclass, 
     cut="number", 
-    method="average",
+    method=in_noflow_clusters$chosen_hclust,
     showplots=TRUE
   )
   
@@ -3582,13 +3585,8 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
 analyze_gauge_representativeness <- function(in_noflow_clusters,
                                              in_gaugep_dt,
                                              in_predvars,
-                                             gires_qs_path
+                                             in_gires_dt
 ) {
-  #Read and compute derived variables for global river network
-  print('Read network')
-  gires_net_dt <- qread(gires_qs_path) %>%
-    comp_derivedvar
-  
   #Get gauges class and attributes
   kclass <- in_noflow_clusters$kclass
   in_gaugep_dt[, grdc_no := as.character(grdc_no)]
@@ -3598,7 +3596,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     .[!duplicated(grdc_no), .(grdc_no, gclass)] %>%
     merge(in_gaugep_dt[, -c('UPLAND_SKM', 'LENGTH_KM'), with=F], 
           by='grdc_no') %>%
-    merge(gires_net_dt, by='HYRIV_ID', all.y=F)
+    merge(in_gires_dt, by='HYRIV_ID', all.y=F)
   
   #Analyze relationship between predicted probability of intermittence
   #and classes
@@ -3617,7 +3615,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   #Compute density distributions of gauges and entire network of non-perennial rivers
   print('Make distribution plot')
   envhist <- layout_ggenvhist(
-    in_rivernetwork = gires_net_dt[predprob1>=0.5,],
+    in_rivernetwork = in_gires_dt[predprob1>=0.5,],
     in_gaugepred = gclass_dt,
     in_predvars = in_predvars)
   
@@ -3627,13 +3625,13 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     "bio12_mm_uav", "bio14_mm_uav",
     "ari_ix_uav", "dis_m3_pyr", "sdis_ms_uyr", "UPLAND_SKM",
     "lka_pc_use", "snw_pc_uyr", "kar_pc_use", "for_pc_use") %>%
-    .[. %in% names(gires_net_dt)]
+    .[. %in% names(in_gires_dt)]
   
   #Scale network data ----------------------------------------------------------
   print('Scale variables')
   net_scaling_parameters <- lapply(cols_to_analyze, function(in_col) {
     #print(in_col)
-    transform_scale_vars(in_dt=gires_net_dt,
+    transform_scale_vars(in_dt=in_gires_dt,
                          value_col=in_col,
                          var_col=NULL, 
                          inplace=T,
@@ -3661,7 +3659,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   
   #Compute overall Wasserstein distance for each variable ----------------------
   print('Compute overall Wasserstein distance for each variable ')
-  gires_varmeans <- gires_net_dt[predprob1>=0.5,
+  gires_varmeans <- in_gires_dt[predprob1>=0.5,
                                  lapply(.SD, mean), 
                                  .SDcols = cols_to_analyze]
   
@@ -3676,12 +3674,12 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     print(in_col)
     if (gclass_dt_trans[!is.na(get(in_col)), .N]>0) {
       #Take a sample of full dataset
-      n_segs <- gires_net_dt[predprob1>=0.5 & !is.na(get(in_col)), .N]
+      n_segs <- in_gires_dt[predprob1>=0.5 & !is.na(get(in_col)), .N]
       net_samp <- sample(n_segs, n_segs/10)
       
       #Compute Wasserstein distance
       wassd <- waddR::wasserstein_metric(
-        x=gires_net_dt[predprob1>=0.5 & !is.na(get(in_col)),][net_samp,get(in_col)],
+        x=in_gires_dt[predprob1>=0.5 & !is.na(get(in_col)),][net_samp,get(in_col)],
         y=gclass_dt_trans[!is.na(get(in_col)), get(in_col)],
         p=2)
     } else {
@@ -3699,15 +3697,15 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   #https://cfwp.github.io/rags2ridges/
   print('Compute Kullback-Leibler divergence ')
   in_comp_mat <- as.matrix(gclass_dt_trans[, cols_to_analyze, with=F])
-  in_ref_mat <- as.matrix(gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F])
+  in_ref_mat <- as.matrix(in_gires_dt[predprob1>=0.5, cols_to_analyze, with=F])
   
   KLdiv_current <- get_KLdiv(
     comp_mat=rbind(in_comp_mat, in_ref_mat[1,]),
-    ref_mat=as.matrix(gires_net_dt[predprob1>=0.5, cols_to_analyze, with=F])
+    ref_mat=as.matrix(in_gires_dt[predprob1>=0.5, cols_to_analyze, with=F])
   )
   
   start=Sys.time()
-  KLdiv_marginal <- gires_net_dt[
+  KLdiv_marginal <- in_gires_dt[
     predprob1>=0.5,
     get_KLdiv(
       comp_mat = rbind(
@@ -3739,13 +3737,11 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
 analyze_environmental_correlates <- function(in_noflow_clusters,
                                              in_gaugep_dt,
                                              in_predvars,
-                                             gires_qs_path
+                                             in_gires_dt
 ) {
   #Read and compute derived variables for global river network
   print('Read network')
-  gires_net_dt <- qread(gires_qs_path) %>%
-    comp_derivedvar
-  
+
   #Get gauges class and attributes
   kclass <- in_noflow_clusters$kclass
   in_gaugep_dt[, grdc_no := as.character(grdc_no)]
@@ -3755,7 +3751,7 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
     .[!duplicated(grdc_no), .(grdc_no, gclass)] %>%
     merge(in_gaugep_dt[, -c('UPLAND_SKM', 'LENGTH_KM'), with=F], 
           by='grdc_no') %>%
-    merge(gires_net_dt, by='HYRIV_ID', all.y=F)
+    merge(in_gires_dt, by='HYRIV_ID', all.y=F)
   
   #
   gclass_dt[, gclass_n := .N, by=gclass][

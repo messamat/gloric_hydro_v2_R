@@ -3097,7 +3097,7 @@ preformat_hydrostats <- function(in_hydrostats) {
     .[, I := .I]
   
   #Assign 0 sD when only one drying event
-  hydrostats_raw[is.na(sD), sD := 0]
+  hydrostats_raw[is.na(sdD), sdD := 0]
 
   #Check distribution and melt
   hydrostats_distrib_p <- ggplot(melt(hydrostats_raw), aes(x=value)) +
@@ -3129,22 +3129,21 @@ preformat_hydrostats <- function(in_hydrostats) {
          P90PDSI = median(hydrostats_scaled_cast$P90PDSI, na.rm=T)
     )]
   
-  hydrostats_mat <- as.matrix(hydrostats_scaled_cast[,-c('I'), with=F])
-  row.names(hydrostats_mat) <- id_dt[order(I), grdc_no]
+  hydrostats_mat_sub <- as.matrix(hydrostats_scaled_cast[,-c('I'), with=F])
+  row.names(hydrostats_mat_sub) <- id_dt[order(I), grdc_no]
   
   # The variables r × sin(θ) and r × cos(θ) were used instead of r and θ to avoid 
   # an artificial break in winter induced by angles.
   
   return(list(
     dt = merge(hydrostats_trans, id_dt, by='I'),
-    mat = hydrostats_mat)
+    mat = hydrostats_mat_sub)
   )
 }
 
 #------ cluster_gauges --------------------------------------------
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 # in_colors = class_colors
-
 
 cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
                                        stats_sel, in_colors) {
@@ -3153,11 +3152,12 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
     !duplicated(variable),
     .(variable, aspect, weight, var_order)]
   
-  hydrostats_mat_sub <- in_hydrostats_preformatted$mat %>%
-    .[, which(colnames(.) %in% stats_sel)]
+  hydrostats_mat <- in_hydrostats_preformatted$mat
+  hydrostats_mat_sub <- hydrostats_mat[
+    , which(colnames(hydrostats_mat) %in% stats_sel)]
   
   #Correlation among variables  ------------------------------------------------
-  var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
+  var_cor <- cor(hydrostats_mat_sub, method='spearman', use="pairwise.complete.obs")
   
   p_varscor <- ggcorrplot(var_cor, #method = "circle", 
                           hc.order = FALSE, hc.method = 'average',
@@ -3174,7 +3174,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   
   #Compute  Euclidean distance based on correlation coefficients and variable weights
   hydro_dist <- cluster::daisy(
-    hydrostats_mat, 
+    hydrostats_mat_sub, 
     metric = "euclidean") %>%
     as.dist
   #weights = hydrostats_order$weight #not worth bothering with weighting given 
@@ -3186,7 +3186,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   hclust_reslist <- lapply(
     algo_list, function(in_method) {
       rundiagnose_clustering(
-        in_mat = hydrostats_mat,
+        in_mat = hydrostats_mat_sub,
         in_dist = hydro_dist,
         in_method = in_method,
         min_nc = 5,
@@ -3195,14 +3195,15 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   names(hclust_reslist) <- algo_list
   
   # hclust_reslist$average$cophcor
+  # hclust_reslist$median$cophcor
+  # hclust_reslist$ward.D2$cophcor
+  # 
   # hclust_reslist$average$p_scree
   # hclust_reslist$average$nbclust_tests$Best.nc
-  # hclust_reslist$median$cophcor
-  # hclust_reslist$ward.D$cophcor
-  # hclust_reslist$ward.D2$cophcor
   # hclust_reslist$ward.D2$p_scree
   # hclust_reslist$ward.D2$nbclust_tests$Best.nc
   
+
   #Define class colors------------------------------------------------------------
   #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
   # classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
@@ -3238,19 +3239,21 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   
   # cluster_analyses_avg$ncl6$class_dt[, classn[[1]], by=gclass]
   # cluster_analyses_avg$ncl6$p_boxplot
-  
+  # cluster_analyses_avg$ncl9$class_dt[, classn[[1]], by=gclass]
+  # cluster_analyses_avg$ncl9$p_boxplot
+  # 
   # cluster_analyses_ward2$ncl6$class_dt[, classn[[1]], by=gclass]
   # cluster_analyses_ward2$ncl6$p_boxplot
   # cluster_analyses_ward2$ncl8$class_dt[, classn[[1]], by=gclass]
   # cluster_analyses_ward2$ncl8$p_boxplot
-  
+
   #Return objects --------------------------------------------------------------
   return(list(
     hclust_reslist_all = hclust_reslist,
     cluster_analyses = cluster_analyses_ward2,
     hydro_dist = hydro_dist,
     chosen_hclust = 'ward.D2',
-    kclass = 8,
+    kclass = 6,
     p_varscor = p_varscor
   ))
 }
@@ -3488,17 +3491,20 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 analyze_cluster_sensitivity <- function(in_noflow_clusters,
-                                        in_hydrostats_preformatted) {
+                                        in_hydrostats_preformatted,
+                                        stats_sel) {
   #Permute each variable
   kclass <- in_noflow_clusters$kclass
   base_clust_reslist <- in_noflow_clusters$hclust_reslist_all[[
     in_noflow_clusters$chosen_hclust]]
   base_hclust_cut <- base_clust_reslist$hclust %>%
     dendextend::cutree(k=kclass, order_clusters_as_data = FALSE)
-  hydrostats_mat <- in_hydrostats_preformatted$mat
+
+  hydrostats_mat_sub <- in_hydrostats_preformatted$mat %>%
+    .[, which(colnames(.) %in% stats_sel)]
   
-  cols_ix <- seq(dim(hydrostats_mat)[2])
-  rows_ix <- seq(dim(hydrostats_mat)[1])
+  cols_ix <- seq(dim(hydrostats_mat_sub)[2])
+  rows_ix <- seq(dim(hydrostats_mat_sub)[1])
   
   #---------------- Compute variable importance in clustering ------------------
   get_col_ARI <- function(in_mat, col_ix, rows_ix, 
@@ -3519,14 +3525,14 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
   }
   
   hydrostats_ari <- future_lapply(cols_ix, function(col_to_permute) {
-    ari_list <- replicate(500, get_col_ARI(in_mat=hydrostats_mat,
+    ari_list <- replicate(500, get_col_ARI(in_mat=hydrostats_mat_sub,
                                            col_ix=col_to_permute,
                                            rows_ix=rows_ix,
                                            in_method=in_noflow_clusters$chosen_hclust,
                                            in_kclass=kclass,
                                            comp_clust_cut=base_hclust_cut))
     return(data.table(
-      var = colnames(hydrostats_mat)[[col_to_permute]],
+      var = colnames(hydrostats_mat_sub)[[col_to_permute]],
       ari = ari_list
     )) 
   }) %>% rbindlist
@@ -3537,7 +3543,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
   #---------------- Compute stability against single-gauge removal  ------------
   boot_clust <- fpc::clusterboot(
     data= as.dist(cluster::daisy(
-      hydrostats_mat, 
+      hydrostats_mat_sub, 
       metric = "euclidean")),
     B=100,
     bootmethod = 'boot',

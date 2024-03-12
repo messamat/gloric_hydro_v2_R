@@ -34,8 +34,9 @@ if (!file.exists(gires_qs_path)) {
 #--- Parameters ---------------------------------------------------------------
 min_nyrs = 15
 overwrite=F
-class_colors <- c("#E69F00", "#DECF03", "#A20101","#0072B2", 
-                  "#A8BF7A", "#686868", "#CC79A7", "#03C18E")
+class_colors <- c("#E69F00", "#A20101","#0072B2", "#03C18E",
+                   "#686868", "#CC79A7")
+#"#A8BF7A", "#DECF03",
 
 ############################# Define targets plan ##############################
 list(
@@ -331,7 +332,14 @@ list(
     cluster_sensitivity,
     analyze_cluster_sensitivity(
       in_noflow_clusters = noflow_clusters,
-      in_hydrostats_preformatted = noflow_hydrostats_preformatted)
+      in_hydrostats_preformatted = noflow_hydrostats_preformatted,
+      stats_sel = c('f0', 'medianN', 'sdN',
+                    'medianD', 'sdD', 
+                    'Ic', 'bfi', 'medianDr',
+                    'Fper', 'FperM10',
+                    'PDSIratio', 'P90PDSI',
+                    'theta', 'r')
+      )
   ),
 
   tar_target(

@@ -446,7 +446,7 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
                by=var_col]
     }
   }
-
+  
   if (is.null(var_col)) {
     trans_mean <- mean(dt_trans$value_trans, na.rm=T)
     trans_sd <- sd(dt_trans$value_trans, na.rm=T)
@@ -1962,7 +1962,7 @@ plot_anthropo_stats <- function(in_gmeta_formatted,
   
   if (export & !is.null(fig_outdir)) {
     ggsave(file.path(fig_outdir, paste0('anthropo_plot',
-                                    format(Sys.Date(), '%Y%m%d'), '.png')),
+                                        format(Sys.Date(), '%Y%m%d'), '.png')),
            p_patchwork,
            width = 20, height = 20, units='cm'
     )
@@ -2681,15 +2681,15 @@ analyze_metastats <- function(in_metastats_dt,
     scale_x_continuous(name="Minimum number of years of valid records") +
     scale_y_continuous(name="Maximum number of missing daily records per year after interpolation") +
     scale_color_gradientn(colors=c("#440154FF","#404788FF", '#2D708EFF',
-                                  '#20A387FF',  "#55C667FF")) + 
+                                   '#20A387FF',  "#55C667FF")) + 
     facet_wrap(~max_interp,
                labeller = as_labeller(c(
                  `0` = 'Missing data interpolation: none',
                  `5` = 'Missing data interpolation: max. 5-day gaps',
                  `7` = 'Missing data interpolation: max. 7-day gaps',
                  `10`= 'Missing data interpolation: max. 10 days gaps')
-                 )
-               )+
+               )
+    )+
     theme_bw() +
     theme(legend.position='none',
           text=element_text(size=14))
@@ -2788,10 +2788,10 @@ compute_noflow_hydrostats_util <- function(in_dt,
     
     #Find the Julian day with the most number of no-flow days on interannual average
     driest_6mocenter <- in_dt[get(jday_col) < 366 #can lead to artefacts if drying was infrequent but occurred during that time
-      , as.Date(
-        unique(get(jday_col))[
-          which.max(.SD[, mean(noflow_6morollsum, na.rm=T),by=jday_col]$V1)],
-        origin=as.Date("1970-01-01"))
+                              , as.Date(
+                                unique(get(jday_col))[
+                                  which.max(.SD[, mean(noflow_6morollsum, na.rm=T),by=jday_col]$V1)],
+                                origin=as.Date("1970-01-01"))
     ]
     
     #Identify the 6-month period centered on that julian day as the dry period
@@ -2973,7 +2973,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
     #Timing
     theta = atan2(mean(sin_t, na.rm=T),
                   mean(cos_t, na.rm=T) 
-                  ),
+    ),
     r = sqrt(mean(cos_t, na.rm=T)^2 
              + mean(sin_t, na.rm=T)^2),
     
@@ -3012,7 +3012,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
     r_cos_theta = r*cos(theta),
     r_sin_theta = r*sin(theta)
   )]
-
+  
   #Compute seasonal predictability of no-flow events (Sd6)
   q_stats$Sd6 <- dt[, ym := format(date, '%Y%m')] %>%
     .[, any(!is.na(noflow_period)), by=.(year, ym, dry_6mo)] %>%
@@ -3027,7 +3027,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
   #See "Gustard, A., & Demuth, S. (2008). Manual on low-flow estimation and 
   #prediction. Operational Hydrology Report No. 50 (World Meteorological Organization (WMO), Ed.). Opera."s
   q_stats$bfi <- compute_baseflow_gustard(dt)[, mean(bfQ/Qobs_interp, na.rm=T)]  
-    
+  
   # medianDr	Median duration of runoff event (*) (day)
   q_stats$medianDr <- compute_baseflow_gustard(dt) %>%
     compute_medianDr
@@ -3147,7 +3147,7 @@ preformat_hydrostats <- function(in_hydrostats) {
   
   #Assign 0 sD when only one drying event
   hydrostats_raw[is.na(sdD), sdD := 0]
-
+  
   #Check distribution and melt
   hydrostats_distrib_p <- ggplot(melt(hydrostats_raw), aes(x=value)) +
     geom_density() +
@@ -3258,7 +3258,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   # hclust_reslist$ward.D2$p_scree
   # hclust_reslist$ward.D2$nbclust_tests$Best.nc
   
-
+  
   #Define class colors------------------------------------------------------------
   #in_colors <- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
   # classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
@@ -3301,7 +3301,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   # cluster_analyses_ward2$ncl6$p_boxplot
   # cluster_analyses_ward2$ncl8$class_dt[, classn[[1]], by=gclass]
   # cluster_analyses_ward2$ncl8$p_boxplot
-
+  
   #Return objects --------------------------------------------------------------
   return(list(
     hclust_reslist_all = hclust_reslist,
@@ -3554,7 +3554,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
     in_noflow_clusters$chosen_hclust]]
   base_hclust_cut <- base_clust_reslist$hclust %>%
     dendextend::cutree(k=kclass, order_clusters_as_data = FALSE)
-
+  
   hydrostats_mat_sub <- in_hydrostats_preformatted$mat %>%
     .[, which(colnames(.) %in% stats_sel)]
   
@@ -3721,8 +3721,8 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   #Compute overall Wasserstein distance for each variable ----------------------
   print('Compute overall Wasserstein distance for each variable ')
   gires_varmeans <- in_gires_dt[predprob1>=0.5,
-                                 lapply(.SD, mean), 
-                                 .SDcols = cols_to_analyze]
+                                lapply(.SD, mean), 
+                                .SDcols = cols_to_analyze]
   
   # calculating standardized bias and Wasserstein distance for each variable
   bias_dt <- gclass_dt_trans %>%
@@ -3794,15 +3794,20 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
 # in_gaugep_dt <- tar_read(gaugep_dt)
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_predvars <- tar_read(predvars)
+#in_gires_dt <- tar_read(gires_dt)
+#in_colors = class_colors
 
 analyze_environmental_correlates <- function(in_noflow_clusters,
                                              in_gaugep_dt,
                                              in_predvars,
-                                             in_gires_dt
+                                             in_gires_dt,
+                                             in_colors,
+                                             export = T,
+                                             fig_outdir = NULL
 ) {
   #Read and compute derived variables for global river network
   print('Read network')
-
+  
   #Get gauges class and attributes
   kclass <- in_noflow_clusters$kclass
   in_gaugep_dt[, grdc_no := as.character(grdc_no)]
@@ -3814,25 +3819,219 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
           by='grdc_no') %>%
     merge(in_gires_dt, by='HYRIV_ID', all.y=F)
   
-  #
+  
   gclass_dt[, gclass_n := .N, by=gclass][
     , gclass_weight := max(gclass_n)/gclass_n ]
-
+  
+  setnames(gclass_dt, in_predvars$varcode, in_predvars$varname, skip_absent = T)
+  
+  #----------------- BUILD BOXPLOT ------------------------------------------------
+  #Get box plot
+  gclass_dt_sub<-  gclass_dt[
+    , c("gclass",
+        "predprob1",
+        "Drainage area",
+        "Natural Discharge pour point Annual average",
+        "BIO11 - Mean Temperature of Coldest Quarter catchment Average",
+        "Permafrost Extent catchment Spatial extent (%)" ,
+        "Snow Cover Extent catchment Maximum or Annual maximum" ,
+        "BIO14 - Precipitation of Driest Month catchment Average",
+        "BIO15 - Precipitation Seasonality (Coefficient of Variation) catchment Average",
+        "Global Aridity Index watershed Average",
+        "Terrain Slope watershed Average",
+        "Sand Fraction in Soil 0-100 cm watershed Average"),
+    with=F
+  ] 
+  
+  bp_theme <- function(){
+    theme_bw() %+replace%
+      theme(legend.position = 'none',
+            axis.line = element_line(color='darkgrey'),
+            axis.title.y = element_text(
+              angle = 90,
+              margin = margin(t = 0, r = 0, b = 0, l = 0)),
+            panel.grid = element_blank(),
+            panel.border = element_blank(),
+            text=element_text(size=12),
+            strip.background = element_blank(),
+            strip.text = element_text(margin = margin(0,0,0.1,0, "cm")))
+  }
+  
+  
+  bp_uparea <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, y=`Drainage area`, color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_log10(name=expression('Drainage area -'~km^2)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_dis <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, y=`Natural Discharge pour point Annual average`, color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_log10(name=expression('Average discharge -'~m^3~s^-1),
+                  breaks=c(0.01, 0.1, 1, 10, 100, 1000)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_coldtemp <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, 
+        y=`BIO11 - Mean Temperature of Coldest Quarter catchment Average`, 
+        color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_continuous(name=str_wrap(
+      'Mean T of coldest quarter in catchment - °C', 30)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_bio14 <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, 
+        y=`Global Aridity Index watershed Average`, 
+        color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_sqrt(name=str_wrap(
+      'Precipitation of driest month in catchment - mm', 30)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_bio15 <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, 
+        y=`BIO15 - Precipitation Seasonality (Coefficient of Variation) catchment Average`, 
+        color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_continuous(name=str_wrap(
+      'Precipitation seasonality (CV) in catchment', 30)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_slo <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, 
+        y=`Terrain Slope watershed Average`/10, 
+        color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_continuous(name='Terrain slope - degrees') +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_sand <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, 
+        y=`Sand Fraction in Soil 0-100 cm watershed Average`, 
+        color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_continuous(name=str_wrap(
+      'Sand fraction in watershed soil (0-100 cm) - %', 30)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  bp_predprob <- ggplot(
+    gclass_dt_sub, 
+    aes(x=gclass, 
+        y=predprob1, 
+        color=factor(gclass))) +
+    geom_jitter(size=0.4, alpha=0.5) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_y_continuous(name=str_wrap(
+      'Predicted probability of intermittence', 30)) +
+    scale_x_discrete(name='Class') +
+    scale_color_manual(values=in_colors) +
+    #geom_hline(yintercept=0) +
+    coord_cartesian(clip='off') +
+    bp_theme()
+  
+  
+  bp_mosaic <- (bp_uparea + bp_dis + bp_bio14 + bp_bio15 +
+         bp_coldtemp + bp_predprob + bp_slo + bp_sand + 
+      plot_layout(ncol = 2) 
+  )
+  
+  gclass_dt_sub[, range(`Drainage area`), by=gclass]
+  
+  #----------------- BUILD TREE ------------------------------------------------
   #Train a classification tree
-  tree_formula <- as.formula(paste0("gclass~",
-                    paste(names(gclass_dt)[names(gclass_dt) %in% in_predvars$varcode],
-                          collapse='+')))
+  tree_formula <- as.formula(paste0("gclass~`",
+                                    paste(names(gclass_dt)[names(gclass_dt)
+                                                           %in% in_predvars$varname],
+                                          collapse='`+`'),
+                                    "`")
+  )
+  
+  split.fun <- function(x, labs, digits, varlen, faclen)
+  {
+    # replace commas with spaces (needed for strwrap)
+    labs <- gsub(",", " ", labs)
+    for(i in 1:length(labs)) {
+      # split labs[i] into multiple lines
+      labs[i] <- paste(strwrap(labs[i], width=30), collapse="\n")
+    }
+    labs
+  }
   
   rpart_mod1 <- rpart(formula=tree_formula, data=gclass_dt,
                       weights = gclass_dt$gclass_weight,
-                      control = rpart.control(cp = 0.01)
-                    )
+                      control = rpart.control(cp = 0.008)
+  )
   
-  plot(rpart_mod1)
-  text(rpart_mod1, use.n = TRUE)
+  tree_plot <- rpart.plot(rpart_mod1, type=3, extra=8,
+                          uniform=T, tweak=1.8,
+                          box.palette = as.list(in_colors),
+                          split.fun=split.fun)
   
-  labels(rpart_mod1)
+  #Save and return------------------------------------
+  if (export & !is.null(fig_outdir)) {
+    ggsave(file.path(fig_outdir, paste0('p_boxplot_env_ward_D2',
+                                        format(Sys.Date(), '%Y%m%d'), '.png')),
+           (bp_mosaic),
+           width = 15, height = 25, units='cm'
+    )
     
+    pdf(file=file.path(fig_outdir, paste0('p_tree_env_ward_D2',
+                                          format(Sys.Date(), '%Y%m%d'), '.pdf')),
+        width = 20, height = 10)
+    rpart.plot(rpart_mod1, type=3, extra=8,
+               uniform=T, tweak=1.15,
+               box.palette = as.list(in_colors),
+               split.fun=split.fun)
+    dev.off()
+  }
+  
+  return(list(
+    p_boxplot = bp_mosaic,
+    p_tree = tree_plot
+  ))
 }
 
 

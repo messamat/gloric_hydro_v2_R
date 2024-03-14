@@ -34,8 +34,8 @@ if (!file.exists(gires_qs_path)) {
 #--- Parameters ---------------------------------------------------------------
 min_nyrs = 15
 overwrite=F
-class_colors <- c("#E69F00", "#A20101","#0072B2", "#03C18E","#7570b3",
-                   "#686868", "#CC79A7", "#A8BF7A", "#DECF03")
+class_colors <- c("#E69F00", "#A20101","#0072B2", "#03C18E",
+                  "#CC79A7", "#686868", "#7570b3","#A8BF7A", "#DECF03")
 
 ############################# Define targets plan ##############################
 list(
@@ -353,6 +353,19 @@ list(
   )
   ,
 
+  tar_target(
+    clusters_env_analysis,
+    analyze_environmental_correlates(
+      in_noflow_clusters = noflow_clusters,
+      in_gaugep_dt = gaugep_dt,
+      in_predvars = predvars,
+      in_gires_dt = gires_dt,
+      in_colors = class_colors,
+      export = T,
+      fig_outdir = figdir
+    )
+  ),
+
   # tar_target(
   #   gauge_representativeness,
   #   analyze_gauge_representativeness(in_noflow_clusters = noflow_clusters,
@@ -385,6 +398,10 @@ list(
         ggsave(file.path(figdir, paste0('p_boxplot_', pname_suffix)),
                noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
                width = 30, height = 30, units = "cm")
+        
+        ggsave(file.path(figdir, paste0('p_boxplot_small_', pname_suffix)),
+               noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
+               width = 20, height = 20, units = "cm")
         
         ggsave(file.path(figdir, paste0('p_hydrographs_',  pname_suffix)),
                unit_hydrographs,

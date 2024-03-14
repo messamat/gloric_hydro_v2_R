@@ -1847,15 +1847,20 @@ format_gauges_metadata <- function(
 #------ plot_anthropo_stats -------------------------------------------------
 #in_gmeta_formatted = tar_read(gmeta_formatted)
 
-plot_anthropo_stats <- function(in_gmeta_formatted) {
+plot_anthropo_stats <- function(in_gmeta_formatted, 
+                                vlines = list(dor=2, crop=25, pop=100, built=1),
+                                export = T,
+                                fig_outdir = NULL) {
   #Degree of regulation plot ---------------------------------------------------
   dt_format_dor <- melt_anthropo_stats(in_dt=in_gmeta_formatted,
                                        fieldroot = 'dor') 
   
-  p_dor <- ggplot(dt_format_dor, aes(x=value, y=year, fill = n, 
-                                     group=year, height = ..count..)) +
+  p_dor <- ggplot(dt_format_dor, 
+                  aes(x=value, y=year, fill = n, 
+                      group=year, height = after_stat(count))) +
     geom_density_ridges(stat='density', scale=15, alpha=1/2,
                         rel_min_height = 0.0005)  +
+    geom_vline(xintercept = vlines$dor)+
     scale_x_continuous(
       name = 'Degree of regulation (%)',
       trans=scales::pseudo_log_trans(base = 10),
@@ -1876,12 +1881,14 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
                                         fieldroot = 'crop') %>%
     .[!is.na(value),]
   
-  p_crop <- ggplot(dt_format_crop, aes(x=value, y=year, fill = n, 
-                                       group=year, height = ..count..)) +
+  p_crop <- ggplot(dt_format_crop, 
+                   aes(x=value, y=year, fill = n, 
+                       group=year, height = after_stat(count))) +
     geom_density_ridges(stat='density', scale=8, alpha=1/2,
                         rel_min_height = 0.001)  +
+    geom_vline(xintercept = vlines$crop)+
     scale_x_continuous(
-      name = 'crop extent upstream (%)',
+      name = 'Crop extent upstream (%)',
       breaks=c(0, 10, 25, 50, 75, 100)) + 
     scale_y_continuous(name='Year',
                        breaks=seq(1900, 2020, 20)) +
@@ -1900,10 +1907,12 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
                                        fieldroot = 'pop') %>%
     .[!is.na(value),]
   
-  p_pop <- ggplot(dt_format_pop, aes(x=value, y=year, fill = n, 
-                                     group=year, height = ..count..)) +
+  p_pop <- ggplot(dt_format_pop, 
+                  aes(x=value, y=year, fill = n, 
+                      group=year, height = after_stat(count))) +
     geom_density_ridges(stat='density', scale=5, alpha=1/2,
                         rel_min_height = 0.001)  +
+    geom_vline(xintercept = vlines$pop)+
     scale_x_continuous(
       name = expression('Population density upstream'~(km^-2)),
       trans=scales::pseudo_log_trans(base = 10),
@@ -1926,10 +1935,12 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
                                          fieldroot = 'built') %>%
     .[!is.na(value),]
   
-  p_built <- ggplot(dt_format_built, aes(x=value, y=year, fill = n, 
-                                         group=year, height = ..count..)) +
+  p_built <- ggplot(dt_format_built, 
+                    aes(x=value, y=year, fill = n, 
+                        group=year, height = after_stat(count))) +
     geom_density_ridges(stat='density', scale=10, alpha=1/2,
                         rel_min_height = 0.001)  +
+    geom_vline(xintercept = vlines$built)+
     scale_x_continuous(
       name = 'Built extent upstream (%)',
       trans=scales::pseudo_log_trans(base = 10),
@@ -1945,8 +1956,17 @@ plot_anthropo_stats <- function(in_gmeta_formatted) {
     theme(plot.margin=margin(1, 0.5, 0.1, 0.1, "cm")
     )
   
+  #Assemble and export patchwork -------------------------
   p_patchwork <- (p_crop + p_dor+ plot_layout(axes='collect'))/
     (p_pop + p_built + plot_layout(axes='collect'))
+  
+  if (export & !is.null(fig_outdir)) {
+    ggsave(file.path(fig_outdir, paste0('anthropo_plot',
+                                    format(Sys.Date(), '%Y%m%d'), '.png')),
+           p_patchwork,
+           width = 20, height = 20, units='cm'
+    )
+  }
   
   return(p_patchwork)
 }
@@ -1990,7 +2010,7 @@ filter_reference_gauges <- function(in_gmeta_formatted,
                     grdc_no = as.character(grdc_no)),
              by=grdc_no]
   
-  ngauges <- gauges_sub[n_years >= 20, .N, by=year]  
+  ngauges <- gauges_sub[n_years >= 15, .N, by=year]  
   ref_gauges_ts <- ggplot(ngauges, aes(x=year, y=N)) +
     geom_line(linewidth=1.5) +
     scale_y_log10(breaks=c(1, 10, 100, 1000, 2000, 3000)) +
@@ -2133,7 +2153,7 @@ prepare_QC_data_util <- function(in_grdc_no,
              )]
   
   #Check whether there are 0
-  potential_npr <- q_dt_attri[, .SD[Qobs<0.01,.N]>0]
+  potential_npr <- q_dt_attri[, .SD[Qobs<=0.001,.N]>0]
   
   #Computer the percentage of integer values
   integer_perc <- q_dt_attri[!is.na(Qobs), 
@@ -2611,7 +2631,9 @@ compute_metastatistics_wrapper <- function(in_outliers_output_dt,
 #------ analyze_metastats -----------------------------------------------
 #in_metastats_dt <- tar_read(metastats_dt)
 
-analyze_metastats <- function(in_metastats_dt) {
+analyze_metastats <- function(in_metastats_dt,
+                              export = T,
+                              fig_outdir = figdir) {
   #Check which ones are non-perennial (npr) 
   # have at least one day < 5L/s if Q50>1 or <= 1L/s if Q50<1
   in_metastats_dt[, unique(grdc_no)]
@@ -2656,9 +2678,21 @@ analyze_metastats <- function(in_metastats_dt) {
   plot_ngauges <- ggplot(metastats_ngauges, 
                          aes(x=min_nyears, y=max_miss, color=ngauges)) +
     geom_text(aes(label=ngauges)) +
-    facet_wrap(~max_interp) +
-    scale_color_distiller(palette='RdPu') +
-    theme_bw()
+    scale_x_continuous(name="Minimum number of years of valid records") +
+    scale_y_continuous(name="Maximum number of missing daily records per year after interpolation") +
+    scale_color_gradientn(colors=c("#440154FF","#404788FF", '#2D708EFF',
+                                  '#20A387FF',  "#55C667FF")) + 
+    facet_wrap(~max_interp,
+               labeller = as_labeller(c(
+                 `0` = 'Missing data interpolation: none',
+                 `5` = 'Missing data interpolation: max. 5-day gaps',
+                 `7` = 'Missing data interpolation: max. 7-day gaps',
+                 `10`= 'Missing data interpolation: max. 10 days gaps')
+                 )
+               )+
+    theme_bw() +
+    theme(legend.position='none',
+          text=element_text(size=14))
   
   # ggplot(metastats_ngauges, 
   #        aes(x=min_nyears, y=ngauges, color=max_miss, group=max_miss)
@@ -2671,6 +2705,15 @@ analyze_metastats <- function(in_metastats_dt) {
   metastats_meanyrs <- metastats_nyears[nyears>15, 
                                         .SD[, mean(nyears)],
                                         by=c('max_miss', 'max_interp')]
+  
+  if (export & !is.null(fig_outdir)) {
+    ggsave(file.path(fig_outdir, paste0('cleaned_ngauges_plot',
+                                        format(Sys.Date(), '%Y%m%d'), '.png')),
+           plot_ngauges,
+           width = 20, height = 20, units='cm'
+    )
+  }
+  
   return(list(
     plot_ngauges = plot_ngauges,
     metastats_meanyrs = metastats_meanyrs,
@@ -2963,6 +3006,12 @@ compute_noflow_hydrostats_util <- function(in_dt,
                           theta,
                           (theta - pi*max(-1, (in_lat/23.5)))%%(2*pi)
     )]
+  
+  #Compute r x cos(theta) and r x sin(theta) for the actual classification (see Sauquet et al. 2021)
+  q_stats[, `:=`(
+    r_cos_theta = r*cos(theta),
+    r_sin_theta = r*sin(theta)
+  )]
 
   #Compute seasonal predictability of no-flow events (Sd6)
   q_stats$Sd6 <- dt[, ym := format(date, '%Y%m')] %>%
@@ -3144,6 +3193,12 @@ preformat_hydrostats <- function(in_hydrostats) {
 #------ cluster_gauges --------------------------------------------
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 # in_colors = class_colors
+# stats_sel = c('f0', 'medianN', 'sdN',
+#               'medianD', 'sdD',
+#               'Ic', 'bfi', 'medianDr',
+#               'Fper', 'FperM10',
+#               'PDSIratio', 'P90PDSI',
+#               'r_cos_theta', 'r_sin_theta')
 
 cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
                                        stats_sel, in_colors) {
@@ -3157,7 +3212,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
     , which(colnames(hydrostats_mat) %in% stats_sel)]
   
   #Correlation among variables  ------------------------------------------------
-  var_cor <- cor(hydrostats_mat_sub, method='spearman', use="pairwise.complete.obs")
+  var_cor <- cor(hydrostats_mat, method='spearman', use="pairwise.complete.obs")
   
   p_varscor <- ggcorrplot(var_cor, #method = "circle", 
                           hc.order = FALSE, hc.method = 'average',
@@ -3169,7 +3224,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
       palette='RdBu', 
       limits=c(-1, 1), 
       breaks=c(-1, -0.5, 0, 0.5, 1)) +
-    theme(legend.position.inside = c(0.8, 0.3))
+    theme(legend.position = c(0.8, 0.3))
   
   
   #Compute  Euclidean distance based on correlation coefficients and variable weights
@@ -3205,11 +3260,11 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   
 
   #Define class colors------------------------------------------------------------
-  #classcol<- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
+  #in_colors <- c("#176c93","#d95f02","#7570b3","#e7298a","#66a61e","#e6ab02","#7a5614","#6baed6","#00441b", '#e41a1c') #9 classes with darker color (base blue-green from Colorbrewer2 not distinguishable on printed report and ppt)
   # classcol <- c('#999900', '#728400', '#008F6B', '#005E7F', '#4A4A4A', '#A1475D',
   #               '#756200', '#C96234', '#4782B5', "#00441b",'#984ea3', '#e41a1c',
   #               '#4daf4a','#ff7f00')
-  #classcol_temporal <- c(,'#377eb8',,'#666666','#a65628')
+  # classcol_temporal <- c(,'#377eb8',,'#666666','#a65628')
   
   
   #Make table of gauge classes and good looking dendogram-----------------------
@@ -3225,7 +3280,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   })
   names(cluster_analyses_avg) <- paste0('ncl', nclass_list)
   
-  nclass_list <- c(6, 8)
+  nclass_list <- c(6, 9)
   cluster_analyses_ward2 <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
       in_mat = hydrostats_mat,

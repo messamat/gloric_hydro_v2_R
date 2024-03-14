@@ -34,9 +34,8 @@ if (!file.exists(gires_qs_path)) {
 #--- Parameters ---------------------------------------------------------------
 min_nyrs = 15
 overwrite=F
-class_colors <- c("#E69F00", "#A20101","#0072B2", "#03C18E",
-                   "#686868", "#CC79A7")
-#"#A8BF7A", "#DECF03",
+class_colors <- c("#E69F00", "#A20101","#0072B2", "#03C18E","#7570b3",
+                   "#686868", "#CC79A7", "#A8BF7A", "#DECF03")
 
 ############################# Define targets plan ##############################
 list(
@@ -175,7 +174,10 @@ list(
   ,
 
   tar_target(anthropo_plot,
-             plot_anthropo_stats(in_gmeta_formatted = gmeta_formatted)
+             plot_anthropo_stats(in_gmeta_formatted = gmeta_formatted,
+                                 vlines = list(dor=2, crop=25, pop=100, built=1),
+                                 export = T,
+                                 fig_outdir = figdir)
   ),
 
   tar_target(ref_gauges,
@@ -278,7 +280,9 @@ list(
 
   tar_target(
     metastats_analyzed,
-    analyze_metastats(in_metastats_dt=metastats_dt)
+    analyze_metastats(in_metastats_dt=metastats_dt,
+                      export = T,
+                      fig_outdir = figdir)
   ),
 
   tar_target(
@@ -305,7 +309,7 @@ list(
                                              'Ic', 'bfi', 'medianDr',
                                              'Fper', 'FperM10',
                                              'PDSIratio', 'P90PDSI',
-                                             'theta', 'r'),
+                                             'r_cos_theta', 'r_sin_theta'),
                                in_colors=class_colors)
   ),
 
@@ -338,7 +342,7 @@ list(
                     'Ic', 'bfi', 'medianDr',
                     'Fper', 'FperM10',
                     'PDSIratio', 'P90PDSI',
-                    'theta', 'r')
+                    'r_cos_theta', 'r_sin_theta')
       )
   ),
 
@@ -349,40 +353,48 @@ list(
   )
   ,
 
-  tar_target(
-    gauge_representativeness,
-    analyze_gauge_representativeness(in_noflow_clusters = noflow_clusters,
-                                     in_gaugep_dt = gaugep_dt,
-                                     in_predvars = predvars,
-                                     in_gires_dt = gires_dt
-    )
-  ),
+  # tar_target(
+  #   gauge_representativeness,
+  #   analyze_gauge_representativeness(in_noflow_clusters = noflow_clusters,
+  #                                    in_gaugep_dt = gaugep_dt,
+  #                                    in_predvars = predvars,
+  #                                    in_gires_dt = gires_dt
+  #   )
+  # ),
 
   tar_target(
     export_plots,
     {
-
-      pname_suffix <- paste0(gsub('[.]','_', noflow_clusters$chosen_hclust), '_',
+      ggsave(file.path(figdir, paste0('p_varscor', '_',
+                                      format(Sys.Date(), '%Y%m%d'), '.png')),
+             noflow_clusters$p_varscor)
+      
+      pname_suffix_pdf <- paste0(gsub('[.]','_', noflow_clusters$chosen_hclust), '_',
                              format(Sys.Date(), '%Y%m%d'), '.pdf')
+      pname_suffix_png <- paste0(gsub('[.]','_', noflow_clusters$chosen_hclust), '_',
+                                 format(Sys.Date(), '%Y%m%d'), '.png')
+      
+      lapply(list(pname_suffix_pdf, pname_suffix_png), function(pname_suffix) {
+        ggsave(file.path(figdir, paste0('p_scree_', pname_suffix)),
+               noflow_clusters$hclust_reslist_all[[noflow_clusters$chosen_hclust]]$p_scree)
+        
+        ggsave(file.path(figdir, paste0('p_dendo_', pname_suffix)),
+               noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_dendo,
+               width = 25, height = 10, units = "cm")
+        
+        ggsave(file.path(figdir, paste0('p_boxplot_', pname_suffix)),
+               noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
+               width = 30, height = 30, units = "cm")
+        
+        ggsave(file.path(figdir, paste0('p_hydrographs_',  pname_suffix)),
+               unit_hydrographs,
+               width = 20, height = 20, units = "cm") 
+      }
+        )
 
-      ggsave(file.path(figdir, paste0('p_scree_', pname_suffix)),
-             noflow_clusters$hclust_reslist_all[[noflow_clusters$chosen_hclust]]$p_scree
-             )
-
-      ggsave(file.path(figdir, paste0('p_dendo_', pname_suffix)),
-             noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_dendo,
-             width = 25, height = 10, units = "cm")
-
-      ggsave(file.path(figdir, paste0('p_boxplot_', pname_suffix)),
-             noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
-             width = 30, height = 30, units = "cm")
-
-      ggsave(file.path(figdir, paste0('p_hydrographs_',  pname_suffix)),
-             unit_hydrographs,
-             width = 20, height = 20, units = "cm")
     }
   ),
-
+  
   tar_target(
     export_tables,
     {
@@ -392,7 +404,7 @@ list(
                   extradigit = 2, inplace=F) %>%
         .[, stat_format := paste0(emmean, ' (', lower.CL, '-', upper.CL, ')')] %>%
         dcast(gclass+classn~variable, value.var = 'stat_format')
-
+      
       fwrite(stats_table,
              file.path(figdir,paste0('hydrostats_',
                                      format(Sys.Date(), '%Y%m%d'), '.csv')

@@ -415,14 +415,23 @@ list(
   tar_target(
     export_tables,
     {
+      #Hydrological metrics table
       stats_table <- noflow_clusters$cluster_analyses[[
-        paste0('ncl',  noflow_clusters$kclass)]]$class_stats %>%
-        digitform(cols=c('emmean', 'lower.CL', 'upper.CL'),
-                  extradigit = 2, inplace=F) %>%
-        .[, stat_format := paste0(emmean, ' (', lower.CL, '-', upper.CL, ')')] %>%
+        paste0('ncl',  noflow_clusters$kclass)]]$class_dt %>%
+        rbind(., copy(.)[, gclass := 'All']) %>%
+        .[variable=='f0', value := 365.25*value] %>%
+        .[, list(mean = mean(value, na.rm=T), 
+                 q10 = quantile(value, 0.1, na.rm=T),
+                 q90 = quantile(value, 0.9, na.rm=T),
+                 classn = length(unique(grdc_no))),
+          by=.(variable, gclass)] %>%
+        digitform(cols=c('mean', 'q10', 'q90'),
+                  extradigit = 1, inplace=F) %>%
+        .[, stat_format := paste0(mean, ' (', q10, '-', q90, ')')] %>%
         dcast(gclass+classn~variable, value.var = 'stat_format')
+
       
-      fwrite(stats_table,
+      fwrite(stats_table, 
              file.path(figdir,paste0('hydrostats_',
                                      format(Sys.Date(), '%Y%m%d'), '.csv')
              ))

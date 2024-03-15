@@ -3825,15 +3825,44 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
   
   setnames(gclass_dt, in_predvars$varcode, in_predvars$varname, skip_absent = T)
   
-  #----------------- BUILD BOXPLOT ------------------------------------------------
-  #Get box plot
+  #----------------- BUILD TREE ------------------------------------------------
+  #Train a classification tree
+  tree_formula <- as.formula(paste0("gclass~`",
+                                    paste(names(gclass_dt)[names(gclass_dt)
+                                                           %in% in_predvars$varname],
+                                          collapse='`+`'),
+                                    "`")
+  )
+  
+  split.fun <- function(x, labs, digits, varlen, faclen)
+  {
+    # replace commas with spaces (needed for strwrap)
+    labs <- gsub(",", " ", labs)
+    for(i in 1:length(labs)) {
+      # split labs[i] into multiple lines
+      labs[i] <- paste(strwrap(labs[i], width=30), collapse="\n")
+    }
+    labs
+  }
+  
+  rpart_mod1 <- rpart(formula=tree_formula, data=gclass_dt,
+                      weights = gclass_dt$gclass_weight,
+                      control = rpart.control(cp = 0.008)
+  )
+  
+  tree_plot <- rpart.plot(rpart_mod1, type=3, extra=8,
+                          uniform=T, tweak=1.8,
+                          box.palette = as.list(in_colors),
+                          split.fun=split.fun)
+  
+  #----------------- CREATE STATS TABLE ----------------------------------------
   gclass_dt_sub<-  gclass_dt[
-    , c("gclass",
+    , c("grdc_no",
+        "gclass",
         "predprob1",
         "Drainage area",
         "Natural Discharge pour point Annual average",
         "BIO11 - Mean Temperature of Coldest Quarter catchment Average",
-        "Permafrost Extent catchment Spatial extent (%)" ,
         "Snow Cover Extent catchment Maximum or Annual maximum" ,
         "BIO14 - Precipitation of Driest Month catchment Average",
         "BIO15 - Precipitation Seasonality (Coefficient of Variation) catchment Average",
@@ -3843,6 +3872,21 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
     with=F
   ] 
   
+  env_tab <- melt(rbind(gclass_dt_sub,
+                              copy(gclass_dt_sub)[, gclass := 'All']),
+                        id.vars=c('gclass', 'grdc_no')) %>%
+    .[, list(mean = mean(value, na.rm=T), 
+             q10 = quantile(value, 0.1, na.rm=T),
+             q90 = quantile(value, 0.9, na.rm=T),
+             classn = length(unique(grdc_no))),
+      by=.(variable, gclass)] %>%
+    digitform(cols=c('mean', 'q10', 'q90'),
+              extradigit = 2, inplace=F) %>%
+    .[, stat_format := paste0(mean, ' (', q10, '-', q90, ')')] %>%
+    dcast(gclass+classn~variable, value.var = 'stat_format')
+  
+  #----------------- BUILD BOXPLOT ------------------------------------------------
+  #Get box plot
   bp_theme <- function(){
     theme_bw() %+replace%
       theme(legend.position = 'none',
@@ -3901,7 +3945,7 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
   bp_bio14 <- ggplot(
     gclass_dt_sub, 
     aes(x=gclass, 
-        y=`Global Aridity Index watershed Average`, 
+        y=`BIO14 - Precipitation of Driest Month catchment Average`, 
         color=factor(gclass))) +
     geom_jitter(size=0.4, alpha=0.5) +
     geom_boxplot(outlier.shape = NA) +
@@ -3974,41 +4018,11 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
   
   
   bp_mosaic <- (bp_uparea + bp_dis + bp_bio14 + bp_bio15 +
-         bp_coldtemp + bp_predprob + bp_slo + bp_sand + 
-      plot_layout(ncol = 2) 
+                  bp_coldtemp + bp_predprob + bp_slo + bp_sand + 
+                  plot_layout(ncol = 2) 
   )
   
   gclass_dt_sub[, range(`Drainage area`), by=gclass]
-  
-  #----------------- BUILD TREE ------------------------------------------------
-  #Train a classification tree
-  tree_formula <- as.formula(paste0("gclass~`",
-                                    paste(names(gclass_dt)[names(gclass_dt)
-                                                           %in% in_predvars$varname],
-                                          collapse='`+`'),
-                                    "`")
-  )
-  
-  split.fun <- function(x, labs, digits, varlen, faclen)
-  {
-    # replace commas with spaces (needed for strwrap)
-    labs <- gsub(",", " ", labs)
-    for(i in 1:length(labs)) {
-      # split labs[i] into multiple lines
-      labs[i] <- paste(strwrap(labs[i], width=30), collapse="\n")
-    }
-    labs
-  }
-  
-  rpart_mod1 <- rpart(formula=tree_formula, data=gclass_dt,
-                      weights = gclass_dt$gclass_weight,
-                      control = rpart.control(cp = 0.008)
-  )
-  
-  tree_plot <- rpart.plot(rpart_mod1, type=3, extra=8,
-                          uniform=T, tweak=1.8,
-                          box.palette = as.list(in_colors),
-                          split.fun=split.fun)
   
   #Save and return------------------------------------
   if (export & !is.null(fig_outdir)) {
@@ -4026,11 +4040,17 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
                box.palette = as.list(in_colors),
                split.fun=split.fun)
     dev.off()
+    
+    fwrite(env_tab, 
+           file.path(fig_outdir,paste0('envstats_',
+                                   format(Sys.Date(), '%Y%m%d'), '.csv')
+           ))
   }
   
   return(list(
     p_boxplot = bp_mosaic,
-    p_tree = tree_plot
+    p_tree = tree_plot,
+    tab = env_tab
   ))
 }
 

@@ -308,7 +308,7 @@ list(
                                              'medianD', 'sdD', 
                                              'Ic', 'bfi', 'medianDr',
                                              'Fper', 'FperM10',
-                                             'PDSIratio', 'P90PDSI',
+                                             'PDSIdiff', 'P90PDSI',
                                              'r_cos_theta', 'r_sin_theta'),
                                in_colors=class_colors)
   ),
@@ -341,7 +341,7 @@ list(
                     'medianD', 'sdD', 
                     'Ic', 'bfi', 'medianDr',
                     'Fper', 'FperM10',
-                    'PDSIratio', 'P90PDSI',
+                    'PDSIdiff', 'P90PDSI',
                     'r_cos_theta', 'r_sin_theta')
       )
   ),
@@ -426,7 +426,7 @@ list(
                  classn = length(unique(grdc_no))),
           by=.(variable, gclass)] %>%
         digitform(cols=c('mean', 'q10', 'q90'),
-                  extradigit = 1, inplace=F) %>%
+                  extradigit = 2, inplace=F) %>%
         .[, stat_format := paste0(mean, ' (', q10, '-', q90, ')')] %>%
         dcast(gclass+classn~variable, value.var = 'stat_format')
 

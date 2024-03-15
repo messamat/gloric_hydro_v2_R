@@ -2989,7 +2989,7 @@ compute_noflow_hydrostats_util <- function(in_dt,
       sum(Qobs_interp <= q_thresh),
     
     #50th and 90th quantile of PDSI during no-flow
-    pdsi_medratio = .SD[is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)]
+    PDSIdiff = .SD[is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)]
     -.SD[!is.na(noflow_period), quantile(PDSI, 0.5, na.rm=T)],
     
     P90PDSI = .SD[!is.na(noflow_period), quantile(PDSI, 0.9, na.rm=T)]
@@ -3120,14 +3120,14 @@ preformat_hydrostats <- function(in_hydrostats) {
                  "meanN", "medianN","sdN",   
                  "meanD", "medianD", "sdD", "d80",
                  "Drec", "Ic", "bfi", "medianDr",
-                 "Fper","FperM10", "pdsi_medratio", "P90PDSI",
-                 "theta", "r", "Sd6"),
+                 "Fper","FperM10", "PDSIdiff", "P90PDSI",
+                 "theta", "r", "Sd6", 'r_cos_theta', 'r_sin_theta'),
     aspect = c('Intermittence',
                rep('Frequency', 3),
                rep('Duration', 4),
                rep('Rate of change', 4),
                rep('Climate dependence', 4),
-               rep('Timing', 3)),
+               rep('Timing', 5)),
     weight = c(1,
                rep(1/3, 3),
                rep(1/4, 4),
@@ -3154,7 +3154,7 @@ preformat_hydrostats <- function(in_hydrostats) {
     facet_wrap(~variable, scales='free')
   
   hydrostats_meltattri <- melt(hydrostats_raw, id.vars = 'I') %>%
-    merge(hydrostats_order, ., by='variable') 
+    merge(hydrostats_order, ., by='variable', all.x=T) 
   
   
   hydrostats_trans <- transform_scale_vars(in_dt=hydrostats_meltattri, 
@@ -3173,8 +3173,8 @@ preformat_hydrostats <- function(in_hydrostats) {
   
   #Impute PDSIq50 and q90 with a median
   hydrostats_scaled_cast[
-    is.na(pdsi_medratio),
-    `:=`(pdsi_medratio = median(hydrostats_scaled_cast$pdsi_medratio, na.rm=T),
+    is.na(PDSIdiff),
+    `:=`(PDSIdiff = median(hydrostats_scaled_cast$PDSIdiff, na.rm=T),
          P90PDSI = median(hydrostats_scaled_cast$P90PDSI, na.rm=T)
     )]
   
@@ -3547,11 +3547,17 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 analyze_cluster_sensitivity <- function(in_noflow_clusters,
                                         in_hydrostats_preformatted,
-                                        stats_sel) {
+                                        stats_sel,
+                                        export = T,
+                                        fig_outdir = NULL) {
   #Permute each variable
   kclass <- in_noflow_clusters$kclass
+  
   base_clust_reslist <- in_noflow_clusters$hclust_reslist_all[[
     in_noflow_clusters$chosen_hclust]]
+  
+  class_dt <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]$class_dt
+  
   base_hclust_cut <- base_clust_reslist$hclust %>%
     dendextend::cutree(k=kclass, order_clusters_as_data = FALSE)
   
@@ -3590,11 +3596,40 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
       var = colnames(hydrostats_mat_sub)[[col_to_permute]],
       ari = ari_list
     )) 
-  }) %>% rbindlist
+  }) %>% rbindlist %>%
+    .[, mean_ari := mean(ari), by=var] %>%
+    .[, var := factor(var, levels=.SD[order(mean_ari), unique(var)])] %>%
+    merge(unique(class_dt[, .(variable, aspect)]), 
+          by.x='var', by.y='variable')
   
-  hydrostats_ari[, mean_ari := mean(ari), by=var] %>%
-    .[, var := factor(var, levels=.SD[order(mean_ari), unique(var)])]
   
+  #Plot variable importance
+  p_varimp <- ggplot(hydrostats_ari, aes(x=var, y=ari, fill=aspect)) +
+    geom_violin(alpha=0.7, draw_quantiles=0.5, color=NA) +
+    geom_text(data=hydrostats_ari[!duplicated(var),], 
+              aes(y=mean_ari, label=round(mean_ari,2)),
+              vjust=-.5, alpha=0.75) +
+    scale_y_continuous(name=
+      'More important                                           Less important
+      Adjusted Rand Index (ARI) after metric permutation'
+    ,
+    breaks=seq(0.2,1,0.2), limits=c(0.2,1), expand=c(0,0)) +
+    scale_x_discrete(name='Hydrologic metric') +
+    scale_fill_viridis(name='Flow regime aspect', discrete=T, option='D') +
+    coord_flip() +
+    theme_classic() +
+    theme(panel.grid.major = element_line(),
+          text=element_text(size=12),
+          axis.title.x= element_text(hjust = 0.5))
+  
+  #Save plot
+  if (export & !is.null(fig_outdir)) {
+    ggsave(file.path(fig_outdir, paste0('p_varimp',
+                                        format(Sys.Date(), '%Y%m%d'), '.png')),
+           (p_varimp),
+           width = 15, height = 15, units='cm'
+    )
+  }
   #---------------- Compute stability against single-gauge removal  ------------
   boot_clust <- fpc::clusterboot(
     data= as.dist(cluster::daisy(
@@ -3873,8 +3908,8 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
   ] 
   
   env_tab <- melt(rbind(gclass_dt_sub,
-                              copy(gclass_dt_sub)[, gclass := 'All']),
-                        id.vars=c('gclass', 'grdc_no')) %>%
+                        copy(gclass_dt_sub)[, gclass := 'All']),
+                  id.vars=c('gclass', 'grdc_no')) %>%
     .[, list(mean = mean(value, na.rm=T), 
              q10 = quantile(value, 0.1, na.rm=T),
              q90 = quantile(value, 0.9, na.rm=T),
@@ -4043,7 +4078,7 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
     
     fwrite(env_tab, 
            file.path(fig_outdir,paste0('envstats_',
-                                   format(Sys.Date(), '%Y%m%d'), '.csv')
+                                       format(Sys.Date(), '%Y%m%d'), '.csv')
            ))
   }
   

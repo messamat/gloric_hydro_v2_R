@@ -342,7 +342,9 @@ list(
                     'Ic', 'bfi', 'medianDr',
                     'Fper', 'FperM10',
                     'PDSIdiff', 'P90PDSI',
-                    'r_cos_theta', 'r_sin_theta')
+                    'r_cos_theta', 'r_sin_theta'),
+      export = T,
+      fig_outdir = figdir
       )
   ),
 

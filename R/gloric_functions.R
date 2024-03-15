@@ -552,7 +552,7 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
               aes(x = x, y = 0.94*min(hori_segs$yend), label = label, 
                   colour = col, size = cex), 
               hjust=0, angle = 0) +
-    coord_flip(ylim=c(limits=c(max(dend_segs$yend), 0.85*min(hori_segs$yend))), #min(hori_segs$yend)
+    coord_flip(ylim=c(limits=c(max(dend_segs$yend), 0.75*min(hori_segs$yend))), #min(hori_segs$yend)
                clip='on') +
     theme_classic() +
     theme(plot.margin = margin(0,1,0,0, 'cm'),
@@ -752,7 +752,7 @@ cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors,
     class_stats, 
     aes(x=gclass, y=get(value_col), color=factor(gclass))) +
     geom_jitter(size=0.4, alpha=0.5) +
-    geom_boxplot(outlier.shape = NA) +
+    geom_boxplot(outlier.shape = NA, alpha=0.75) +
     geom_text(data=diff_letters, 
               aes(x=gclass, label=grp_letter, y=emmean), 
               color='black', size=3, alpha=0.5) +
@@ -3197,7 +3197,7 @@ preformat_hydrostats <- function(in_hydrostats) {
 #               'medianD', 'sdD',
 #               'Ic', 'bfi', 'medianDr',
 #               'Fper', 'FperM10',
-#               'PDSIratio', 'P90PDSI',
+#               'PDSIdiff', 'P90PDSI',
 #               'r_cos_theta', 'r_sin_theta')
 
 cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
@@ -3236,7 +3236,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   #that weights only range from 0.25 to 0.33
   
   #
-  #Cluster departments based on UPGMA or Ward's---------------------------------
+  #Cluster stations based on UPGMA or Ward's---------------------------------
   algo_list <- list('average', 'median', 'ward.D2')
   hclust_reslist <- lapply(
     algo_list, function(in_method) {
@@ -3268,10 +3268,12 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   
   
   #Make table of gauge classes and good looking dendogram-----------------------
+  mat_forbp <- hydrostats_mat[
+    , -which(colnames(hydrostats_mat) %in% c('r_cos_theta', 'r_sin_theta'))]
   nclass_list <- c(6, 9)
   cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
-      in_mat = hydrostats_mat,
+      in_mat =  mat_forbp,
       in_hclust = hclust_reslist$average$hclust,
       in_kclass = kclass,
       in_colors = in_colors, 
@@ -3280,10 +3282,10 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   })
   names(cluster_analyses_avg) <- paste0('ncl', nclass_list)
   
-  nclass_list <- c(6, 9)
+  nclass_list <- c(6, 7,8, 9)
   cluster_analyses_ward2 <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
-      in_mat = hydrostats_mat,
+      in_mat =  mat_forbp,
       in_hclust = hclust_reslist$ward.D2$hclust,
       in_kclass = kclass,
       in_colors = in_colors, 
@@ -3308,7 +3310,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
     cluster_analyses = cluster_analyses_ward2,
     hydro_dist = hydro_dist,
     chosen_hclust = 'ward.D2',
-    kclass = 6,
+    kclass = 9,
     p_varscor = p_varscor
   ))
 }
@@ -3624,7 +3626,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
   
   #Save plot
   if (export & !is.null(fig_outdir)) {
-    ggsave(file.path(fig_outdir, paste0('p_varimp',
+    ggsave(file.path(fig_outdir, paste0('p_varimp_',
                                         format(Sys.Date(), '%Y%m%d'), '.png')),
            (p_varimp),
            width = 15, height = 15, units='cm'

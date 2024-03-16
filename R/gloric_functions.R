@@ -496,13 +496,6 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
                                order_clusters_as_data = order_clusters)
   classr_df <- data.frame(ID=names(classr), gclass=classr) 
   
-  if (!is.null(classnames)) {
-    classr_df <- merge(classr_df, classnames, by='gclass')
-    grouplabels <- classnames$classnames
-  } else {
-    grouplabels <- TRUE
-  }
-  
   if (!is.null(in_labels)) {
     in_hclust$labels <- in_labels
   }
@@ -533,6 +526,15 @@ prettydend_classes <- function(in_hclust, colorder=NULL,
   
   #Get labels to superimpose upon halo
   new_classlabels <- ggdendro_p$labels
+  
+  if (!is.null(classnames)) {
+    classr_df <- merge(classr_df, classnames, by='gclass')  %>%
+      as.data.table %>%
+      .[, gclass := NULL] %>%
+      setnames('classnames', 'gclass')
+    new_classlabels$label <- paste("Class", classnames$classnames)
+  } 
+  
   new_classlabels$col <- in_colors[colorder]
   
   #Background rectangle for labels
@@ -662,19 +664,21 @@ rundiagnose_clustering <- function(in_mat, in_dist, in_method, min_nc, max_nc,
 cuttree_and_visualize <- function(in_mat, in_hclust, in_kclass, in_colors, 
                                   in_meltdt, id_col, 
                                   value_col='value', variable_col='variable',
-                                  aspect_col = 'aspect', classnames= NULL) {
-  
+                                  aspect_col = 'aspect', 
+                                  classnames= NULL, colorder=NULL) {
   #Get dendrogram and class membership
-  dendo_format <-prettydend_classes(in_hclust = in_hclust, 
+  dendo_format <- prettydend_classes(in_hclust = in_hclust, 
                                     in_kclass=in_kclass, 
                                     in_colors=in_colors,
-                                    classnames= NULL)
+                                    classnames=classnames,
+                                    colorder=colorder)
   
   class_stats <- dendo_format$classes %>%
     as.data.table %>%
     .[, classn := .N, by='gclass'] %>%
     merge(in_meltdt, ., by.x=id_col, by.y='ID') %>%
-    .[, gclass := factor(gclass, levels=sort(unique(gclass)))]
+    .[, gclass := factor(gclass, levels=sort(unique(gclass)))] %>%
+    .[variable %in% colnames(in_mat),]
   
   #Test classification significance ------------------------------------------
   mat_dt <- in_mat %>%
@@ -3226,7 +3230,6 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
       breaks=c(-1, -0.5, 0, 0.5, 1)) +
     theme(legend.position = c(0.8, 0.3))
   
-  
   #Compute  Euclidean distance based on correlation coefficients and variable weights
   hydro_dist <- cluster::daisy(
     hydrostats_mat_sub, 
@@ -3270,6 +3273,7 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
   #Make table of gauge classes and good looking dendogram-----------------------
   mat_forbp <- hydrostats_mat[
     , -which(colnames(hydrostats_mat) %in% c('r_cos_theta', 'r_sin_theta'))]
+  
   nclass_list <- c(6, 9)
   cluster_analyses_avg <- lapply(nclass_list, function(kclass) {
     cuttree_and_visualize(
@@ -3316,19 +3320,19 @@ cluster_noflow_gauges_full <- function(in_hydrostats_preformatted,
 }
 
 #------ Export gauge classes ---------------------------------------------------
-# in_noflow_clusters <- tar_read(noflow_clusters)
-# in_path_gaugep <- tar_read(path_gaugep)
-# out_shp_root <- file.path(resdir, 'gaugep_classstats_avg')
-
-export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
+# in_cluster_postanalysis <- tar_read(sel_cluster_postanalysis)
+# in_path_gaugep = tar_read(path_gaugep)
+# out_shp_root=file.path(resdir, 'gaugep_classstats_ward')
+export_gauges_classes <- function(in_cluster_postanalysis, 
+                                  in_path_gaugep,
                                   out_shp_root) {
   
-  out_shp <- paste0(out_shp_root, in_noflow_clusters$kclass, '.shp')
+  out_shp <- paste0(out_shp_root,
+                    in_cluster_postanalysis$class_dt[, length(unique(gclass))],
+                    '.shp')
   gaugep <- terra::vect(dirname(in_path_gaugep), layer=basename(in_path_gaugep))
-  cluster_analyses <- in_noflow_clusters$cluster_analyses[[
-    paste0('ncl', in_noflow_clusters$kclass)]]
-  
-  class_dt <- cluster_analyses$class_dt
+
+  class_dt <- in_cluster_postanalysis$class_dt
   class_cast <- data.table::dcast(class_dt, grdc_no+gclass~variable, value.var = 'value')
   
   gaugep_classstats <- terra::merge(gaugep, class_cast, by='grdc_no', all.x=F)
@@ -3338,106 +3342,7 @@ export_gauges_classes <- function(in_noflow_clusters, in_path_gaugep,
 }
 
 
-#------ Plot class hydrograph wrapper --------------------------------------------------
-# in_noflow_clusters= tar_read(noflow_clusters)
-# in_metastats_dt <- tar_read(metastats_dt)
-# max_interp_sel = 5
-# max_miss_sel = 0
-# noflow_qthresh=0.001
-
-plot_class_hydrograph_wrapper <- function(in_noflow_clusters,
-                                          in_metastats_dt,
-                                          max_interp_sel,
-                                          max_miss_sel,
-                                          noflow_qthresh=0.001
-) {
-  kclass <- in_noflow_clusters$kclass
-  #in_noflow_clusters$hclust_reslist_all[[in_noflow_clusters$chosen_hclust]]
-  cluster_analyses <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]
-  
-  k_colors <- cluster_analyses$p_dendo$layers[[4]]$data %>%
-    as.data.table %>%
-    .[order(label), col]
-  
-  hydrograph_facets <- lapply(seq(kclass), function(in_class) {
-    print(in_class)
-    
-    class_dt_sub <- cluster_analyses$class_dt[gclass == in_class,] %>%
-      .[!duplicated(grdc_no), .(grdc_no, gclass, classn)]
-    
-    out_facet <- plot_class_hydrograph(in_class_dt = class_dt_sub,
-                                       in_metastats_dt = in_metastats_dt,
-                                       max_interp_sel = max_interp_sel,
-                                       max_miss_sel = max_miss_sel,
-                                       in_color = k_colors[in_class],
-                                       noflow_qthresh=noflow_qthresh)
-    return(out_facet)
-  })
-  
-  out_plotgrid <- wrap_plots(hydrograph_facets, 
-                             ncol=floor(sqrt(length(hydrograph_facets))),
-                             axes='collect') +
-    plot_layout(axis_titles = "collect") + 
-    plot_annotation(tag_levels = '1')  & 
-    theme(plot.tag = element_text(size = 10))
-  
-  return(out_plotgrid)
-}
-
-#------ Plot class hydrograph --------------------------------------------------
-# in_class_dt <- class_dt_sub
-# #in_no <- '3649455'
-# max_interp_sel = 5
-# max_miss_sel = 0
-
-plot_class_hydrograph <- function(in_class_dt, 
-                                  in_metastats_dt,
-                                  max_interp_sel,
-                                  max_miss_sel,
-                                  in_color,
-                                  noflow_qthresh=0.001) {
-  
-  interp_fn <- paste0('missingdays_edit',
-                      fifelse(max_interp_sel >0,
-                              paste0('_interp', max_interp_sel),
-                              '')
-  )
-  
-  q_dt_bind <- lapply(in_class_dt$grdc_no, function(in_no) {
-    print(in_no)
-    #For given gauge, get years with less than the maximum number of missing days
-    #given maximum interpolation period
-    meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
-                                    & get(interp_fn)<=max_miss_sel,]
-    
-    #Read data, keeping only years with number of missing days under threshold
-    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]],
-                  select = c('grdc_no', 'date', 'Qobs', 'tmax', 'year')) %>% #subset columns for speed
-      .[year %in% meta_sub_yrs$year,] %>%
-      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
-      .[!duplicated(date),] %>%
-      .[, grdc_no := as.character(grdc_no)] 
-    
-    return(q_dt)
-  }) %>% 
-    rbindlist %>%
-    merge(in_metastats_dt[!duplicated(grdc_no), .(grdc_no, y_geo)],
-          by='grdc_no', all.y=F)
-  
-  out_facet <- plot_hydrograph(
-    in_dt = q_dt_bind,
-    value_col = 'Qobs',
-    date_col = 'date',
-    lat_col = 'y_geo',
-    in_color = in_color,
-    noflow_qthresh = noflow_qthresh, 
-    smoothing_window = 7
-  )
-  
-  return(out_facet)
-}
-
-#------ Plot hydrograph --------------------------------------------------\
+#------ Plot hydrograph --------------------------------------------------
 # in_dt <- q_dt_bind
 # value_col <- 'Qobs'
 # date_col <- 'date'
@@ -3531,7 +3436,7 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
         trans = ~ unit_scale_axis(.),
         breaks = c(0, 0.01, 0.05, 0.1, 0.25, 0.5 , 0.75, 1))
     ) + 
-    scale_x_date(name=expression(Date~frac(South, North)), 
+    scale_x_date(name=expression(Date~frac(North, South)), 
                  date_breaks = "3 month", date_labels='%b',
                  sec.axis = sec_axis(trans = ~ . - 181),
                  expand=c(0,0)) + 
@@ -3543,22 +3448,123 @@ plot_hydrograph <- function(in_dt, value_col, date_col, lat_col, back_col,
   
   return(classhydro_facet)
 }
+#------ Plot class hydrograph --------------------------------------------------
+# in_class_dt <- class_dt_sub
+# #in_no <- '3649455'
+# max_interp_sel = 5
+# max_miss_sel = 0
+
+plot_class_hydrograph <- function(in_class_dt, 
+                                  in_metastats_dt,
+                                  max_interp_sel,
+                                  max_miss_sel,
+                                  in_color,
+                                  noflow_qthresh=0.001) {
+  
+  interp_fn <- paste0('missingdays_edit',
+                      fifelse(max_interp_sel >0,
+                              paste0('_interp', max_interp_sel),
+                              '')
+  )
+  
+  q_dt_bind <- lapply(in_class_dt$grdc_no, function(in_no) {
+    print(in_no)
+    #For given gauge, get years with less than the maximum number of missing days
+    #given maximum interpolation period
+    meta_sub_yrs <- in_metastats_dt[grdc_no==in_no
+                                    & get(interp_fn)<=max_miss_sel,]
+    
+    #Read data, keeping only years with number of missing days under threshold
+    q_dt <- fread(meta_sub_yrs$edited_data_path[[1]],
+                  select = c('grdc_no', 'date', 'Qobs', 'tmax', 'year')) %>% #subset columns for speed
+      .[year %in% meta_sub_yrs$year,] %>%
+      .[min(which(!is.na(Qobs))):max(which(!is.na(Qobs))),] %>% #remove leading and trailing NAs
+      .[!duplicated(date),] %>%
+      .[, grdc_no := as.character(grdc_no)] 
+    
+    return(q_dt)
+  }) %>% 
+    rbindlist %>%
+    merge(in_metastats_dt[!duplicated(grdc_no), .(grdc_no, y_geo)],
+          by='grdc_no', all.y=F)
+  
+  out_facet <- plot_hydrograph(
+    in_dt = q_dt_bind,
+    value_col = 'Qobs',
+    date_col = 'date',
+    lat_col = 'y_geo',
+    in_color = in_color,
+    noflow_qthresh = noflow_qthresh, 
+    smoothing_window = 7
+  )
+  
+  return(out_facet)
+}
+
+#------ Plot class hydrograph wrapper --------------------------------------------------
+# in_cluster_postanalysis <- tar_read(sel_cluster_postanalysis)
+# in_metastats_dt <- tar_read(metastats_dt)
+# max_interp_sel = 5
+# max_miss_sel = 0
+# noflow_qthresh=0.001
+
+plot_class_hydrograph_wrapper <- function(in_cluster_postanalysis,
+                                          in_metastats_dt,
+                                          max_interp_sel,
+                                          max_miss_sel,
+                                          noflow_qthresh=0.001
+) {
+  
+  class_dt <- in_cluster_postanalysis$class_dt
+  kclass <- class_dt[, length(unique(gclass))]
+
+  k_colors <- in_cluster_postanalysis$p_dendo$layers[[4]]$data %>%
+    as.data.table %>%
+    .[order(label), col]
+  
+  hydrograph_facets <- lapply(seq(kclass), function(in_class) {
+    print(in_class)
+    
+    class_dt_sub <- class_dt[gclass == in_class,] %>%
+      .[!duplicated(grdc_no), .(grdc_no, gclass, classn)]
+    
+    out_facet <- plot_class_hydrograph(in_class_dt = class_dt_sub,
+                                       in_metastats_dt = in_metastats_dt,
+                                       max_interp_sel = max_interp_sel,
+                                       max_miss_sel = max_miss_sel,
+                                       in_color = k_colors[in_class],
+                                       noflow_qthresh=noflow_qthresh)
+    return(out_facet)
+  })
+  
+  out_plotgrid <- wrap_plots(hydrograph_facets, 
+                             ncol=floor(sqrt(length(hydrograph_facets))),
+                             axes='collect') +
+    plot_layout(axis_titles = "collect") + 
+    plot_annotation(tag_levels = '1')  & 
+    theme(plot.tag = element_text(size = 10))
+  
+  return(out_plotgrid)
+}
 
 #------ Analyze cluster sensitivity --------------------------------------------
 # in_noflow_clusters <- tar_read(noflow_clusters)
+# in_cluster_postanalysis <- tar_read(sel_cluster_postanalysis)
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
-analyze_cluster_sensitivity <- function(in_noflow_clusters,
+# classnames <- manual_class_order
+analyze_cluster_sensitivity <- function(in_noflow_clusters,  
+                                        in_cluster_postanalysis,
                                         in_hydrostats_preformatted,
                                         stats_sel,
+                                        classnames,
                                         export = T,
                                         fig_outdir = NULL) {
   #Permute each variable
-  kclass <- in_noflow_clusters$kclass
+  class_dt <- in_cluster_postanalysis$class_dt
+  kclass <- class_dt[, length(unique(gclass))]
   
   base_clust_reslist <- in_noflow_clusters$hclust_reslist_all[[
     in_noflow_clusters$chosen_hclust]]
-  
-  class_dt <- in_noflow_clusters$cluster_analyses[[paste0('ncl', kclass)]]$class_dt
   
   base_hclust_cut <- base_clust_reslist$hclust %>%
     dendextend::cutree(k=kclass, order_clusters_as_data = FALSE)
@@ -3610,7 +3616,8 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
     geom_violin(alpha=0.7, draw_quantiles=0.5, color=NA) +
     geom_text(data=hydrostats_ari[!duplicated(var),], 
               aes(y=mean_ari, label=round(mean_ari,2)),
-              vjust=-.5, alpha=0.75) +
+              #vjust=-.5, 
+              alpha=0.75) +
     scale_y_continuous(name=
       'More important                                           Less important
       Adjusted Rand Index (ARI) after metric permutation'
@@ -3633,17 +3640,31 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
     )
   }
   #---------------- Compute stability against single-gauge removal  ------------
+  #See how cluster stability evoldes with increasing number of clusters
+  boot_clust_klist <- lapply(seq(3,kclass), function(k) {
+    fpc::clusterboot(
+      data= hydrostats_mat_sub,
+      B=100,
+      bootmethod = 'boot',
+      clustermethod = hclustCBI,
+      k=kclass, 
+      cut="number", 
+      method=in_noflow_clusters$chosen_hclust,
+      showplots=FALSE
+    )
+  })
+  names(boot_clust_klist) <- paste0('cl', seq(3, kclass))
+  
+  #Compute cluster stability for chosen number of clusters and format it
   boot_clust <- fpc::clusterboot(
-    data= as.dist(cluster::daisy(
-      hydrostats_mat_sub, 
-      metric = "euclidean")),
+    data= hydrostats_mat_sub,
     B=100,
     bootmethod = 'boot',
-    clustermethod = disthclustCBI,
+    clustermethod = hclustCBI,
     k=kclass, 
     cut="number", 
     method=in_noflow_clusters$chosen_hclust,
-    showplots=TRUE
+    showplots=FALSE
   )
   
   base_hclust_cut_ordered <- base_clust_reslist$hclust %>%
@@ -3662,7 +3683,14 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
       bootmean = boot_clust$bootmean,
       bootbrd = boot_clust$bootbrd,
       bootrecover = boot_clust$bootrecover
-    )]
+    )] 
+  
+  if (!is.null(classnames)) {
+    out_bootstats <- out_bootstats[order(gclass),] %>%
+      .[, `:=`(gclass = classnames,
+               gclass_ordered = NULL)] %>%
+      .[order(gclass),]
+  }
   
   #clusters with a stability value less than 0.6 should be considered unstable. 
   #Values between 0.6 and 0.75 indicate that the cluster is measuring a pattern 
@@ -3671,7 +3699,8 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
   
   return(list(
     var_imp_ari = hydrostats_ari,
-    gboot_clust = out_bootstats
+    gboot_clust = out_bootstats,
+    boot_clust_klist = boot_clust_klist
   ))
 }
 
@@ -3834,7 +3863,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
 #in_gires_dt <- tar_read(gires_dt)
 #in_colors = class_colors
 
-analyze_environmental_correlates <- function(in_noflow_clusters,
+analyze_environmental_correlates <- function(in_cluster_postanalysis,
                                              in_gaugep_dt,
                                              in_predvars,
                                              in_gires_dt,
@@ -3846,11 +3875,12 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
   print('Read network')
   
   #Get gauges class and attributes
-  kclass <- in_noflow_clusters$kclass
+  class_dt <- in_cluster_postanalysis$class_dt
+  kclass <- class_dt[, length(unique(gclass))]
+                     
   in_gaugep_dt[, grdc_no := as.character(grdc_no)]
   
-  gclass_dt <- in_noflow_clusters$cluster_analyses[[
-    paste0('ncl', kclass)]]$class_dt %>%
+  gclass_dt <- class_dt %>%
     .[!duplicated(grdc_no), .(grdc_no, gclass)] %>%
     merge(in_gaugep_dt[, -c('UPLAND_SKM', 'LENGTH_KM'), with=F], 
           by='grdc_no') %>%
@@ -3918,7 +3948,7 @@ analyze_environmental_correlates <- function(in_noflow_clusters,
              classn = length(unique(grdc_no))),
       by=.(variable, gclass)] %>%
     digitform(cols=c('mean', 'q10', 'q90'),
-              extradigit = 2, inplace=F) %>%
+              extradigit = 1, inplace=F) %>%
     .[, stat_format := paste0(mean, ' (', q10, '-', q90, ')')] %>%
     dcast(gclass+classn~variable, value.var = 'stat_format')
   

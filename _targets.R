@@ -34,8 +34,18 @@ if (!file.exists(gires_qs_path)) {
 #--- Parameters ---------------------------------------------------------------
 min_nyrs = 15
 overwrite=F
-class_colors <- c("#E69F00", "#A20101","#0072B2", "#03C18E",
-                  "#CC79A7", "#686868", "#7570b3","#A8BF7A", "#DECF03")
+manual_class_order <- c(4, 1, 3, 2, 5, 9, 6, 8, 7) #tree rotation while keeping relationship intact
+class_colors <- c("#62001D", "#E60000", "#FF5500", "#FFC100",
+                  "#00A884", "#00FFC5", "#897044", "#D69DBC", "#CDAA66")
+# class_colors <- c("#A20101", "#E69F00", "#DECF03","#0072B2", "#03C18E",
+#                   "#CC79A7", "#686868", "#7570b3","#A8BF7A")
+
+hydrostats_sel <- c('f0', 'medianN', 'sdN',
+                    'medianD', 'sdD', 
+                    'Ic', 'bfi', 'medianDr',
+                    'Fper', 'FperM10',
+                    'PDSIdiff', 'P90PDSI',
+                    'r_cos_theta', 'r_sin_theta')
 
 ############################# Define targets plan ##############################
 list(
@@ -304,19 +314,33 @@ list(
     noflow_clusters,
     cluster_noflow_gauges_full(in_hydrostats_preformatted=
                                  noflow_hydrostats_preformatted,
-                               stats_sel = c('f0', 'medianN', 'sdN',
-                                             'medianD', 'sdD', 
-                                             'Ic', 'bfi', 'medianDr',
-                                             'Fper', 'FperM10',
-                                             'PDSIdiff', 'P90PDSI',
-                                             'r_cos_theta', 'r_sin_theta'),
+                               stats_sel = hydrostats_sel,
                                in_colors=class_colors)
   ),
 
-
+  tar_target(
+    sel_cluster_postanalysis,
+    noflow_hydrostats_preformatted$mat %>%
+      .[, -which(colnames(.) 
+                 %in% c('r_cos_theta', 'r_sin_theta'))] %>%
+    cuttree_and_visualize(
+      in_mat =  .,
+      in_hclust = noflow_clusters$hclust_reslist_all$ward.D2$hclust,
+      in_kclass = noflow_clusters$kclass,
+      in_colors = class_colors, 
+      in_meltdt = noflow_hydrostats_preformatted$dt,
+      id_col = 'grdc_no',
+      classnames= data.table(
+        gclass = seq(1, 9),
+        classnames= manual_class_order
+      ),
+      colorder = manual_class_order
+    )
+  ),
+  
   tar_target(
     out_gaugesp_path,
-    export_gauges_classes(in_noflow_clusters=noflow_clusters,
+    export_gauges_classes(in_cluster_postanalysis=sel_cluster_postanalysis,
                           in_path_gaugep =path_gaugep,
                           out_shp_root=file.path(resdir, 'gaugep_classstats_ward')
     )
@@ -324,7 +348,7 @@ list(
 
   tar_target(
     unit_hydrographs,
-    plot_class_hydrograph_wrapper(in_noflow_clusters = noflow_clusters,
+    plot_class_hydrograph_wrapper(in_cluster_postanalysis=sel_cluster_postanalysis,
                                   in_metastats_dt = metastats_dt,
                                   max_interp_sel = 5,
                                   max_miss_sel = 0,
@@ -336,13 +360,10 @@ list(
     cluster_sensitivity,
     analyze_cluster_sensitivity(
       in_noflow_clusters = noflow_clusters,
+      in_cluster_postanalysis = sel_cluster_postanalysis,
       in_hydrostats_preformatted = noflow_hydrostats_preformatted,
-      stats_sel = c('f0', 'medianN', 'sdN',
-                    'medianD', 'sdD', 
-                    'Ic', 'bfi', 'medianDr',
-                    'Fper', 'FperM10',
-                    'PDSIdiff', 'P90PDSI',
-                    'r_cos_theta', 'r_sin_theta'),
+      stats_sel = hydrostats_sel,
+      classnames = manual_class_order,
       export = T,
       fig_outdir = figdir
       )
@@ -358,7 +379,7 @@ list(
   tar_target(
     clusters_env_analysis,
     analyze_environmental_correlates(
-      in_noflow_clusters = noflow_clusters,
+      in_cluster_postanalysis = sel_cluster_postanalysis,
       in_gaugep_dt = gaugep_dt,
       in_predvars = predvars,
       in_gires_dt = gires_dt,
@@ -394,20 +415,16 @@ list(
                noflow_clusters$hclust_reslist_all[[noflow_clusters$chosen_hclust]]$p_scree)
         
         ggsave(file.path(figdir, paste0('p_dendo_', pname_suffix)),
-               noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_dendo,
+               sel_cluster_postanalysis$p_dendo,
                width = 25, height = 10, units = "cm")
         
-        ggsave(file.path(figdir, paste0('p_boxplot_', pname_suffix)),
-               noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
-               width = 30, height = 30, units = "cm")
-        
         ggsave(file.path(figdir, paste0('p_boxplot_small_', pname_suffix)),
-               noflow_clusters$cluster_analyses[[paste0('ncl',  noflow_clusters$kclass)]]$p_boxplot,
+               sel_cluster_postanalysis$p_boxplot,
                width = 20, height = 20, units = "cm")
         
         ggsave(file.path(figdir, paste0('p_hydrographs_',  pname_suffix)),
                unit_hydrographs,
-               width = 20, height = 20, units = "cm") 
+               width = 20, height = 20, units = "cm")
       }
         )
 
@@ -416,10 +433,9 @@ list(
   
   tar_target(
     export_tables,
-    {
-      #Hydrological metrics table
-      stats_table <- noflow_clusters$cluster_analyses[[
-        paste0('ncl',  noflow_clusters$kclass)]]$class_dt %>%
+    #Hydrological metrics table
+    lapply(c(0,1,2), function(digits) {
+      stats_table <- sel_cluster_postanalysis$class_dt %>%
         rbind(., copy(.)[, gclass := 'All']) %>%
         .[variable=='f0', value := 365.25*value] %>%
         .[, list(mean = mean(value, na.rm=T), 
@@ -428,18 +444,17 @@ list(
                  classn = length(unique(grdc_no))),
           by=.(variable, gclass)] %>%
         digitform(cols=c('mean', 'q10', 'q90'),
-                  extradigit = 2, inplace=F) %>%
+                  extradigit = digits, inplace=F) %>%
         .[, stat_format := paste0(mean, ' (', q10, '-', q90, ')')] %>%
         dcast(gclass+classn~variable, value.var = 'stat_format')
-
+      
       
       fwrite(stats_table, 
-             file.path(figdir,paste0('hydrostats_',
+             file.path(figdir,paste0('hydrostats_', digits, 'digits_',
                                      format(Sys.Date(), '%Y%m%d'), '.csv')
              ))
-    }
+    })
   )
-
 )
 
 

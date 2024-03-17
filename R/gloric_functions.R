@@ -390,7 +390,8 @@ fill_dt_dates <- function(in_dt, full_yrs, date_col='date') {
 }
 #------ transform_scale_vars ---------------------------------------------------
 transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL, 
-                                 inplace=FALSE, samp_frac=NULL) {
+                                 inplace=FALSE, samp_frac=NULL,
+                                 min_boxcox=-1, max_boxcox=2) {
   if (!inplace) {
     dt <- copy(in_dt)
   } else {
@@ -398,8 +399,7 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
   }
   
   #Make sure 
-  dt_trans <- dt %>%
-    .[, stat_min := min(get(value_col), na.rm=T), by=var_col] %>%
+  dt[, stat_min := min(get(value_col), na.rm=T), by=var_col] %>%
     .[, value_floored := fifelse(stat_min<0, get(value_col)-stat_min, get(value_col)),
       by=var_col] %>%
     .[, stat_non0min_floored := .SD[value_floored>0, min(value_floored, na.rm=T)],
@@ -424,57 +424,56 @@ transform_scale_vars <- function(in_dt, value_col='value', var_col=NULL,
   }
   
   if (!is.null(var_col)) {
-    dt_trans[
+    dt[
       , bc_lambda := 0.5*round(
-        Rfast::bc(samp(value_pos), low=-1, up=2)/0.5), 
+        Rfast::bc(samp(value_pos), low=min_boxcox, up=max_boxcox)/0.5), 
       by=var_col]
     
-    dt_trans[, value_trans := fifelse(
+    dt[, value_trans := fifelse(
       bc_lambda == 0,
       log(value_pos),
       ((value_pos^bc_lambda)-1)/bc_lambda
     ), by=var_col]
   } else {
     bc_lambda <- 0.5*round(
-      Rfast::bc(samp(dt_trans$value_pos), low=-1, up=2)/0.5)
+      Rfast::bc(samp(dt$value_pos), low=min_boxcox, up=max_boxcox)/0.5)
     
     if (bc_lambda[[1]] == 0) {
-      dt_trans[, value_trans := log(value_pos), 
+      dt[, value_trans := log(value_pos), 
                by=var_col]
     } else {
-      dt_trans[, value_trans := ((value_pos^bc_lambda[[1]])-1)/bc_lambda[[1]],
+      dt[, value_trans := ((value_pos^bc_lambda[[1]])-1)/bc_lambda[[1]],
                by=var_col]
     }
   }
   
   if (is.null(var_col)) {
-    trans_mean <- mean(dt_trans$value_trans, na.rm=T)
-    trans_sd <- sd(dt_trans$value_trans, na.rm=T)
+    trans_mean <- mean(dt$value_trans, na.rm=T)
+    trans_sd <- sd(dt$value_trans, na.rm=T)
   }
   
   #Z-scale stats
-  dt_trans[
+  dt[
     , value_scaled := scale(value_trans, center=TRUE, scale=TRUE), 
     by=var_col]
   
   return_list <- list()
   
   if (!inplace) {
-    return_list$dt_trans <- dt_trans
+    return_list$dt <- dt
   }
   
   if (is.null(var_col)) {
-    return_list$min_val <- dt_trans$stat_min[[1]]
-    return_list$min_floor <- dt_trans$stat_non0min_floored[[1]]/2
+    return_list$min_val <- dt$stat_min[[1]]
+    return_list$min_floor <- dt$stat_non0min_floored[[1]]/2
     return_list$trans_mean <- trans_mean
     return_list$trans_sd <- trans_sd
     return_list$bc_lambda <- bc_lambda[[1]]
   }
   
-  if (is.null(var_col) & inplace) {
-    dt_trans[, (value_col) := value_scaled] %>%
-      .[, `:=`(value_scaled=NULL,
-               stat_min=NULL,
+  if (is.null(var_col)) {
+    dt[, (value_col) := value_scaled] %>%
+      .[, `:=`(stat_min=NULL,
                value_floored=NULL,
                stat_non0min_floored=NULL,
                value_pos=NULL,
@@ -1322,7 +1321,7 @@ ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
     penvhist <- ggplot(bindclz, aes_string(x=vartoplot, y='density')) +
       geom_bar(aes(fill=as.factor(source)), stat='identity',
                position = 'dodge', alpha=1/2, width=.6) +
-      scale_fill_manual(values=c('#2b8cbe', '#dd3497'))
+      scale_fill_manual(values=c('#2A788EFF', '#7AD151FF'))
     
   } else if (vartoplot == "glc_pc_u16") {
     rivclz <- in_rivdt[, sum(LENGTH_KM)/in_rivdt[,sum(LENGTH_KM)],
@@ -1334,7 +1333,7 @@ ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
     penvhist <- ggplot(bindclz, aes_string(x=vartoplot, y='density')) +
       geom_bar(aes(fill=as.factor(source)), stat='identity',
                position = 'identity', alpha=1/2, width=.6) +
-      scale_fill_manual(values=c('#2b8cbe', '#dd3497'))
+      scale_fill_manual(values=c('#2A788EFF', '#7AD151FF'))
     #
     #     penvhist <- ggplot(in_gaugedt, aes_string(x=vartoplot)) +
     #       geom_histogram(data=in_rivdt, aes(weight = LENGTH_KM),
@@ -1344,8 +1343,8 @@ ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
   } else {
     penvhist <- ggplot(in_gaugedt, aes_string(x=vartoplot)) +
       geom_density(data=in_rivdt, aes(weight = LENGTH_KM),
-                   fill='#2b8cbe', alpha=0.5) +
-      geom_density(fill='#dd3497', alpha=0.5) +
+                   fill='#2A788EFF', alpha=0.5) +
+      geom_density(fill='#7AD151FF', alpha=0.5) +
       ylab('Density')
   }
   
@@ -1402,10 +1401,10 @@ layout_ggenvhist <- function(in_rivernetwork, in_gaugepred, in_predvars) {
   #Get legend
   pleg <- ggplot(in_gaugepred, aes(x=dis_m3_pyr, fill=factor(IRpredcat_full))) +
     geom_density(alpha=1/2) +
-    scale_fill_manual(values=c('#2b8cbe', '#dd3497'),
+    scale_fill_manual(values=c('#2A788EFF', '#7AD151FF'),
                       name = 'Dataset',
-                      labels=c('Global non-perennial river network (predicted)',
-                               'Training gauges')) +
+                      labels=c('Global non-perennial river reaches (predicted)',
+                               'Gauging stations')) +
     theme(text=element_text(size=14))
   
   tmp <- ggplot_gtable(ggplot_build(pleg))
@@ -3163,7 +3162,7 @@ preformat_hydrostats <- function(in_hydrostats) {
   
   hydrostats_trans <- transform_scale_vars(in_dt=hydrostats_meltattri, 
                                            value_col='value', var_col='variable',
-                                           inplace=FALSE)$dt_trans   
+                                           inplace=FALSE)$dt
   
   hydrostats_distrib_scaled_p <- ggplot(hydrostats_trans, aes(x=value_scaled)) +
     geom_density() +
@@ -3631,7 +3630,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
           text=element_text(size=12),
           axis.title.x= element_text(hjust = 0.5))
   
-  #Save plot
+  #Save plot-----------------
   if (export & !is.null(fig_outdir)) {
     ggsave(file.path(fig_outdir, paste0('p_varimp_',
                                         format(Sys.Date(), '%Y%m%d'), '.png')),
@@ -3647,7 +3646,7 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
       B=100,
       bootmethod = 'boot',
       clustermethod = hclustCBI,
-      k=kclass, 
+      k=k, 
       cut="number", 
       method=in_noflow_clusters$chosen_hclust,
       showplots=FALSE
@@ -3708,11 +3707,14 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
 # in_gaugep_dt <- tar_read(gaugep_dt)
 # in_noflow_clusters <- tar_read(noflow_clusters)
 # in_predvars <- tar_read(predvars)
+# in_gires_dt <- tar_read(gires_dt)
 
 analyze_gauge_representativeness <- function(in_noflow_clusters,
                                              in_gaugep_dt,
                                              in_predvars,
-                                             in_gires_dt
+                                             in_gires_dt,
+                                             export = T,
+                                             fig_outdir = NULL
 ) {
   #Get gauges class and attributes
   kclass <- in_noflow_clusters$kclass
@@ -3749,7 +3751,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   #Scale data for computing distributional distance ----------------------------
   cols_to_analyze <- c(
     "bio1_dc_uav", "bio7_dc_uav", "bio11_dc_uav",
-    "bio12_mm_uav", "bio14_mm_uav",
+    "bio12_mm_uav", "bio14_mm_uav", "slp_dg_uav",
     "ari_ix_uav", "dis_m3_pyr", "sdis_ms_uyr", "UPLAND_SKM",
     "lka_pc_use", "snw_pc_uyr", "kar_pc_use", "for_pc_use") %>%
     .[. %in% names(in_gires_dt)]
@@ -3758,11 +3760,16 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   print('Scale variables')
   net_scaling_parameters <- lapply(cols_to_analyze, function(in_col) {
     #print(in_col)
-    transform_scale_vars(in_dt=in_gires_dt,
-                         value_col=in_col,
-                         var_col=NULL, 
-                         inplace=T,
-                         samp_frac = 0.1)
+    transform_out <- transform_scale_vars(in_dt=in_gires_dt,
+                                          value_col=in_col,
+                                          var_col=NULL, 
+                                          inplace=F,
+                                          samp_frac = 0.1,
+                                          min_boxcox=-2,
+                                          max_boxcox=2)
+    in_gires_dt[, (in_col) := transform_out$dt[[in_col]]]
+    
+    return(transform_out[-1])
   })
   scaling_parameters_dt <- data.table::rbindlist(net_scaling_parameters) %>%
     .[, col := cols_to_analyze]
@@ -3780,7 +3787,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
   
   # Use lapply to iterate over cols_to_analyze
   purrr::walk(cols_to_analyze, function(in_col) {
-    pars <- scaling_parameters_dt[col == in_col, ]
+    pars <- scaling_parameters_dt[col == in_col,]
     transform_column_wpars(in_dt=gclass_dt_trans, in_col, pars)
   })
   
@@ -3815,7 +3822,36 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     return(data.table(variable=in_col, wasser=wassd))
   }) %>% rbindlist
   
-  univar_dist <- merge(bias_dt, wasser_dt, by='variable')
+  univar_dist <- merge(bias_dt, wasser_dt, by='variable') %>%
+    merge(in_predvars[, .(varcode, Attribute)],
+          by.x='variable', by.y='varcode') %>%
+    .[, Attribute := str_trim(
+      gsub("(BIO[1-9]{1,2}[ ][-][ ])|([(]BIO5[-]BIO6[)])",
+           "", Attribute))] %>%
+    .[, Attribute := factor(Attribute, 
+                            levels=.SD[order(wasser),Attribute])]
+  
+  #Plot Wasserstein distance -------
+  p_wasser <- ggplot(univar_dist, aes(x=Attribute,
+                                      y=wasser, color=bias<0)) +
+    geom_segment(aes(xend=Attribute, yend=0.2), alpha=0.75) +
+    geom_point(size=4, alpha=0.75) +
+    scale_x_discrete(labels = function(x) str_wrap(x, width = 15)) +
+    scale_y_continuous(breaks=c(0.2, 0.6, 1.0, 1.4)) +
+    scale_color_manual(name= 'Mean bias',
+                       labels = c('Negative', 'Positive'),
+                       values=c('#443A83FF', '#8FD744FF')) +
+    coord_flip() +
+    theme_classic() +
+    theme(legend.position = c(0.8, 0.5),
+          axis.title.y = element_blank(),
+          text=element_text(size=12))
+  
+  p_wasser_envhist <- p_wasser + envhist + plot_layout(design= "ABBBBBB
+  ABBBBBB
+  ABBBBBB
+  ABBBBBB"
+  )
   
   #Optimize gains in multivariate gauge-network similarity -----------------------
   #For each ungauged river reach, compute the change in Kullback-Leibler 
@@ -3847,14 +3883,28 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
       KLdiv_diff = V1 - KLdiv_current$KLdiv)]
   print(Sys.time()-start)
   
+  
+  # Save plots and return results -----------------------------------------------
+  if (export & !is.null(fig_outdir)) {
+    ggsave(file.path(fig_outdir, paste0('p_wasser_envhist_',
+                                        format(Sys.Date(), '%Y%m%d'), '.pdf')),
+           (p_wasser_envhist),
+           width = 35, height = 20, units='cm'
+    )
+  }
+  
   return(list(
     plot_giresprob_class = giresprob_class_p,
-    plot_envhist = envhist,
+    plot_wasser_envhist = p_wasser_envhist,
     univar_dist =  univar_dist,
     KLdiv_current = KLdiv_current,
     KLdiv_marginal = KLdiv_marginal
   ))    
 }
+# 
+# #Plot Wasserstein distance ------------------------------
+
+
 
 #------ Analyze environmental correlates ---------------------------------------
 # in_gaugep_dt <- tar_read(gaugep_dt)

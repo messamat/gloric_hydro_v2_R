@@ -389,14 +389,16 @@ list(
     )
   ),
 
-  # tar_target(
-  #   gauge_representativeness,
-  #   analyze_gauge_representativeness(in_noflow_clusters = noflow_clusters,
-  #                                    in_gaugep_dt = gaugep_dt,
-  #                                    in_predvars = predvars,
-  #                                    in_gires_dt = gires_dt
-  #   )
-  # ),
+  tar_target(
+    gauge_representativeness,
+    analyze_gauge_representativeness(in_noflow_clusters = noflow_clusters,
+                                     in_gaugep_dt = gaugep_dt,
+                                     in_predvars = predvars,
+                                     in_gires_dt = gires_dt,
+                                     export = T,
+                                     fig_outdir = figdir
+    )
+  ),
 
   tar_target(
     export_plots,
@@ -433,6 +435,7 @@ list(
   
   tar_target(
     export_tables,
+    {
     #Hydrological metrics table
     lapply(c(0,1,2), function(digits) {
       stats_table <- sel_cluster_postanalysis$class_dt %>%
@@ -454,14 +457,11 @@ list(
                                      format(Sys.Date(), '%Y%m%d'), '.csv')
              ))
     })
+    
+    fwrite(gauge_representativeness$KLdiv_marginal,
+           file.path(figdir,paste0('global_KLdiv_',
+                                   format(Sys.Date(), '%Y%m%d'), '.csv'))
+    )
+    }
   )
 )
-
-
-# tar_target(outlier_plot,
-#            plotGRDCtimeseries(GRDCgaugestats_record=data_for_qc$q_dt_attri,
-#                               outpath=NULL,
-#                               maxgap = 366,
-#                               showmissing = T)
-#            )
-# ,

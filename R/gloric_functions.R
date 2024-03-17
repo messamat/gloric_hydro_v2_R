@@ -1321,7 +1321,7 @@ ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
     penvhist <- ggplot(bindclz, aes_string(x=vartoplot, y='density')) +
       geom_bar(aes(fill=as.factor(source)), stat='identity',
                position = 'dodge', alpha=1/2, width=.6) +
-      scale_fill_manual(values=c('#2A788EFF', '#7AD151FF'))
+      scale_fill_manual(values=c('#35978f', '#bf812d'))
     
   } else if (vartoplot == "glc_pc_u16") {
     rivclz <- in_rivdt[, sum(LENGTH_KM)/in_rivdt[,sum(LENGTH_KM)],
@@ -1333,7 +1333,7 @@ ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
     penvhist <- ggplot(bindclz, aes_string(x=vartoplot, y='density')) +
       geom_bar(aes(fill=as.factor(source)), stat='identity',
                position = 'identity', alpha=1/2, width=.6) +
-      scale_fill_manual(values=c('#2A788EFF', '#7AD151FF'))
+      scale_fill_manual(values=c('#35978f', '#bf812d'))
     #
     #     penvhist <- ggplot(in_gaugedt, aes_string(x=vartoplot)) +
     #       geom_histogram(data=in_rivdt, aes(weight = LENGTH_KM),
@@ -1343,8 +1343,8 @@ ggenvhist <- function(vartoplot, in_gaugedt, in_rivdt, in_predvars,
   } else {
     penvhist <- ggplot(in_gaugedt, aes_string(x=vartoplot)) +
       geom_density(data=in_rivdt, aes(weight = LENGTH_KM),
-                   fill='#2A788EFF', alpha=0.5) +
-      geom_density(fill='#7AD151FF', alpha=0.5) +
+                   fill='#35978f', alpha=0.5) +
+      geom_density(fill='#bf812d', alpha=0.5) +
       ylab('Density')
   }
   
@@ -1401,7 +1401,7 @@ layout_ggenvhist <- function(in_rivernetwork, in_gaugepred, in_predvars) {
   #Get legend
   pleg <- ggplot(in_gaugepred, aes(x=dis_m3_pyr, fill=factor(IRpredcat_full))) +
     geom_density(alpha=1/2) +
-    scale_fill_manual(values=c('#2A788EFF', '#7AD151FF'),
+    scale_fill_manual(values=c('#35978f', '#bf812d'),
                       name = 'Dataset',
                       labels=c('Global non-perennial river reaches (predicted)',
                                'Gauging stations')) +
@@ -3551,6 +3551,7 @@ plot_class_hydrograph_wrapper <- function(in_cluster_postanalysis,
 # in_cluster_postanalysis <- tar_read(sel_cluster_postanalysis)
 # in_hydrostats_preformatted <- tar_read(noflow_hydrostats_preformatted)
 # classnames <- manual_class_order
+# stats_sel = hydrostats_sel
 analyze_cluster_sensitivity <- function(in_noflow_clusters,  
                                         in_cluster_postanalysis,
                                         in_hydrostats_preformatted,
@@ -3623,7 +3624,10 @@ analyze_cluster_sensitivity <- function(in_noflow_clusters,
     ,
     breaks=seq(0.2,1,0.2), limits=c(0.2,1), expand=c(0,0)) +
     scale_x_discrete(name='Hydrologic metric') +
-    scale_fill_viridis(name='Flow regime aspect', discrete=T, option='D') +
+    scale_fill_manual(name='Flow regime aspect',
+                      values=c('#543005', '#80cdc1', '#bf812d', 
+                               '#35978f', '#dfc27d')) +
+    #scale_fill_viridis(name='Flow regime aspect', discrete=T, option='D') +
     coord_flip() +
     theme_classic() +
     theme(panel.grid.major = element_line(),
@@ -3840,7 +3844,7 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     scale_y_continuous(breaks=c(0.2, 0.6, 1.0, 1.4)) +
     scale_color_manual(name= 'Mean bias',
                        labels = c('Negative', 'Positive'),
-                       values=c('#443A83FF', '#8FD744FF')) +
+                       values=c('#01665e', '#8c510a')) +
     coord_flip() +
     theme_classic() +
     theme(legend.position = c(0.8, 0.5),
@@ -3901,8 +3905,6 @@ analyze_gauge_representativeness <- function(in_noflow_clusters,
     KLdiv_marginal = KLdiv_marginal
   ))    
 }
-# 
-# #Plot Wasserstein distance ------------------------------
 
 
 
